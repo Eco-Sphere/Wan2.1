@@ -3,7 +3,7 @@ import torch
 import torch.cuda.amp as amp
 from .parallel_mgr import (get_sequence_parallel_rank,
                             get_sequence_parallel_world_size,
-                            get_sp_group)
+                            )
 from ..modules.new_parallel import gather_sequence, split_sequence
 from ..modules.attn_layer import xFuserLongContextAttention
 
@@ -13,6 +13,8 @@ from ..modules.model import sinusoidal_embedding_1d
 def pad_freqs(original_tensor, target_len):
     seq_len, s1, s2 = original_tensor.shape
     pad_size = target_len - seq_len
+    if pad_size == 0:
+        return original_tensor
     padding_tensor = torch.ones(
         pad_size,
         s1,
@@ -24,7 +26,7 @@ def pad_freqs(original_tensor, target_len):
 
 
 @amp.autocast(enabled=False)
-def rope_apply(x, grid_sizes, freqs):
+def rope_apply(x, grid_sizes, freqs_list):
     """
     x:          [B, L, N, C].
     grid_sizes: [B, 3].
@@ -42,20 +44,8 @@ def rope_apply(x, grid_sizes, freqs):
         # precompute multipliers
         x_i = torch.view_as_complex(x[i, :s].to(torch.float64).reshape(
             s, n, -1, 2))
-        freqs_i = torch.cat([
-            freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
-            freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
-            freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1)
-        ],
-                            dim=-1).reshape(seq_len, 1, -1)
-
+        freqs_i_rank = freqs_list[i]
         # apply rotary embedding
-        sp_size = get_sequence_parallel_world_size()
-        sp_rank = get_sequence_parallel_rank()
-        freqs_i = pad_freqs(freqs_i, s * sp_size)
-        s_per_rank = s
-        freqs_i_rank = freqs_i[(sp_rank * s_per_rank):((sp_rank + 1) *
-                                                       s_per_rank), :, :]
         x_i = torch.view_as_real(x_i * freqs_i_rank).flatten(2)
         x_i = torch.cat([x_i, x[i, s:]])
 
@@ -119,6 +109,33 @@ def usp_dit_forward(
         context_clip = self.img_emb(clip_fea)  # bs x 257 x dim
         context = torch.concat([context_clip, context], dim=1)
 
+    # Context Parallel
+    x = split_sequence(x, dim=1)
+
+    c = (self.dim // self.num_heads) // 2
+    s = x.shape[1]
+    freqs = self.freqs.split([c - 2 * (c // 3), c // 3], dim=1)
+    freqs_list=[]
+
+    for i, (f, h, w) in enumerate(grid_sizes.tolist()):
+        seq_len = f * h * w
+
+        freqs_i = torch.cat([
+            freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
+            freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
+            freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1)
+        ],
+                            dim=-1).reshape(seq_len, 1, -1)
+
+        # apply rotary embedding
+        sp_size = get_sequence_parallel_world_size()
+        sp_rank = get_sequence_parallel_rank()
+        freqs_i = pad_freqs(freqs_i, s * sp_size)
+        s_per_rank = s
+        freqs_i_rank = freqs_i[(sp_rank * s_per_rank):((sp_rank + 1) *
+                                                       s_per_rank), :, :]
+        freqs_list.append(freqs_i_rank)
+
     # arguments
     kwargs = dict(
         e=e0,
@@ -127,12 +144,6 @@ def usp_dit_forward(
         freqs=self.freqs,
         context=context,
         context_lens=context_lens)
-
-    # Context Parallel
-    x = split_sequence(x, dim=1)
-    # x = torch.chunk(
-    #     x, get_sequence_parallel_world_size(),
-    #     dim=1)[get_sequence_parallel_rank()]
 
     for block in self.blocks:
         x = block(x, **kwargs)
@@ -170,13 +181,6 @@ def usp_attn_forward(self,
     q, k, v = qkv_fn(x)
     q = rope_apply(q, grid_sizes, freqs)
     k = rope_apply(k, grid_sizes, freqs)
-
-    # TODO: We should use unpaded q,k,v for attention.
-    # k_lens = seq_lens // get_sequence_parallel_world_size()
-    # if k_lens is not None:
-    #     q = torch.cat([u[:l] for u, l in zip(q, k_lens)]).unsqueeze(0)
-    #     k = torch.cat([u[:l] for u, l in zip(k, k_lens)]).unsqueeze(0)
-    #     v = torch.cat([u[:l] for u, l in zip(v, k_lens)]).unsqueeze(0)
 
     x = xFuserLongContextAttention()(
         None,

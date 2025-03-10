@@ -156,27 +156,37 @@ class xFuserLongContextAttention(LongContextAttention):
             ]
 
         all_gather = False
-        if self.args.video_size in self.video_size:
-            all_gather = False
-        else:
-            all_gather = True
+        use_la = True
+        # use_la = False
+        # if self.args.video_size in self.video_size:
+        #     all_gather = False
+        # else:
+        #     all_gather = True
         if not all_gather:
-            if self.world_size == 8:
+            if self.world_size == 2 or self.world_size == 4 or self.world_size == 8:
                 # 3 X (bs, seq_len/N, head_cnt, head_size) -> 3 X (bs, seq_len, head_cnt/N, head_size)
                 # scatter 2, gather 1
-                query_layer = SeqAllToAll4D.apply(
-                    self.ulysses_pg, query, self.scatter_idx, self.gather_idx
-                )
-                key_layer = SeqAllToAll4D.apply(
-                    self.ulysses_pg, key, self.scatter_idx, self.gather_idx
-                )
-                value_layer = SeqAllToAll4D.apply(
-                    self.ulysses_pg, value, self.scatter_idx, self.gather_idx
-                )
+                if self.use_pack_qkv:
+                    qkv = torch.cat([query, key, value]).continous()
+                    qkv = SeqAllToAll4D.apply(
+                        self.ulysses_pg, qkv, self.scatter_idx, self.gather_idx
+                    )
+                    qkv = torch.chunk(qkv, dim=0)
+                    query_layer, key_layer, value_layer = qkv
+                else:
+                    query_layer = SeqAllToAll4D.apply(
+                        self.ulysses_pg, query, self.scatter_idx, self.gather_idx
+                    )
+                    key_layer = SeqAllToAll4D.apply(
+                        self.ulysses_pg, key, self.scatter_idx, self.gather_idx
+                    )
+                    value_layer = SeqAllToAll4D.apply(
+                        self.ulysses_pg, value, self.scatter_idx, self.gather_idx
+                    )
 
-                key_layer = torch.cat([key_layer, joint_tensor_key], dim=1).transpose(1, 2)
-                value_layer = torch.cat([value_layer, joint_tensor_value], dim=1).transpose(1, 2)
                 query_layer = query_layer.transpose(1, 2)
+                key_layer = key_layer.transpose(1, 2)
+                value_layer = value_layer.transpose(1, 2)
                 query_layer_list = query_layer.split(1, dim=1)
                 key_layer_list = key_layer.split(1, dim=1)
                 value_layer_list = value_layer.split(1, dim=1)
@@ -198,46 +208,23 @@ class xFuserLongContextAttention(LongContextAttention):
                             pre_tockens=MAX_TOKEN,
                             next_tockens=MAX_TOKEN
                         )[0]
+                    elif use_la:
+                        q_seqlen = query_layer_list[0].shape[2]
+                        q_dtype = query_layer.dtype
+                        pad_size = ((q_seqlen // 256) + 1) * 256 - q_seqlen
+                        height_padding = torch.zeros([query_layer_list[0].shape[0], query_layer_list[0].shape[1], pad_size,
+                                                      query_layer_list[0].shape[2]], dtype=q_dtype, device=query_layer.device)
+                        query = torch.cat([query_layer_list[i], height_padding], dim = -2).to(torch.float16)
+                        key = torch.cat([key_layer_list[i], height_padding], dim = -2).to(torch.float16)
+                        value = torch.cat([value_layer_list[i], height_padding], dim = -2).to(torch.float16)
+
+                        _, out = torch.ops.mindie.la_mindie_sd(query, key, value, None, None, None, \
+                            query_layer.shape[-1]**-0.5, 1, "BNSD", 1.0, MAX_TOKEN, 1, True)
+                        out = out[:,:,:q_seqlen,:].to(q_dtype)
+
                     output.append(out)
                 out_concat = torch.cat(output, dim=1)
                 out = out_concat.transpose(1, 2)
-            elif self.world_size == 16:
-                # 3 X (bs, seq_len/N, head_cnt, head_size) -> 3 X (bs, seq_len, head_cnt/N, head_size)
-                # scatter 2, gather 1
-                query_layer = SeqAllToAll4D.apply(
-                    self.ulysses_pg, query, self.scatter_idx, self.gather_idx
-                )
-                key_value_layer = SeqAllToAll4D.apply(
-                    self.ulysses_pg, torch.cat((key, value), dim=0), self.scatter_idx, self.gather_idx
-                )
-                joint_tensor_key_value = torch.cat((joint_tensor_key, joint_tensor_value), dim=0)
-                joint_tensor_key_value = joint_tensor_key_value.transpose(1, 2)
-
-                b, s, n, d = key_value_layer.shape
-                kv_full = torch.empty([2, b, s, n, d], dtype=query_layer.dtype, device=query_layer.device)
-                dist.all_gather_into_tensor(kv_full, key_value_layer, group=self.ring_pg)
-
-                kv_full = kv_full.permute(1, 3, 0, 2, 4).reshape(b, n, -1, d)
-                kv_full = torch.cat((kv_full, joint_tensor_key_value), dim=2)
-
-                query_layer = query_layer.transpose(1, 2)
-                key_layer, value_layer = kv_full.chunk(2, dim=0)
-                if self.algo == 1:
-                    seqlen = torch.tensor([[query_layer.shape[2]], [key_layer.shape[2]]], dtype=torch.int32)
-                    intensors = [query_layer, key_layer, value_layer, seqlen]
-                    out = self.self_attention.forward(intensors)[0]
-                elif self.algo == 0:
-                    out = torch_npu.npu_fusion_attention(
-                            query_layer,
-                            key_layer,
-                            value_layer,
-                            head_num=query_layer.shape[1],
-                            input_layout="BNSD",
-                            scale=scale,
-                            pre_tockens=MAX_TOKEN,
-                            next_tockens=MAX_TOKEN
-                        )[0]
-                out = out.transpose(1, 2)
             
             if type(out) == tuple:
                 context_layer, _, _ = out
@@ -250,31 +237,15 @@ class xFuserLongContextAttention(LongContextAttention):
                 self.ulysses_pg, context_layer, self.gather_idx, self.scatter_idx
             )
         else:
-            if self.world_size == 8:
-                output = all_to_all_v1(
-                    query,
-                    key,
-                    value,
-                    joint_tensor_key,
-                    joint_tensor_value,
-                    2,
-                    1,
-                    scale=scale,
-                    algo = self.algo,
-                    self_attention = self.self_attention)
-            elif self.world_size == 16:
-                output = all_to_all_v2(
-                    query,
-                    key,
-                    value,
-                    joint_tensor_key,
-                    joint_tensor_value,
-                    self.ulysses_pg,
-                    self.ring_pg,
-                    2,
-                    1,
-                    scale=scale,
-                    algo = self.algo,
-                    self_attention = self.self_attention)
-        # out e.g., [s/p::h]
+            output = all_to_all_v(
+                query,
+                key,
+                value,
+                joint_tensor_key,
+                joint_tensor_value,
+                2,
+                1,
+                scale=query_layer.shape[-1]**-0.5,
+                algo = self.algo,
+                self_attention = self.self_attention)
         return output

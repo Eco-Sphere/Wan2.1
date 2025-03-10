@@ -79,15 +79,15 @@ class WanT2V:
         self.patch_size = config.patch_size
         self.vae = WanVAE(
             vae_pth=os.path.join(checkpoint_dir, config.vae_checkpoint),
-            device=self.device)
+            device=self.device
+            dtype=self.param_dtype)
 
         logging.info(f"Creating WanModel from {checkpoint_dir}")
-        self.model = WanModel.from_pretrained(checkpoint_dir)
+        self.model = WanModel.from_pretrained(checkpoint_dir, torch_dtype=self.param_dtype)
         self.model.eval().requires_grad_(False)
 
         if use_usp:
-            from xfuser.core.distributed import \
-                get_sequence_parallel_world_size
+            from .distributed.parallel_mgr import get_sequence_parallel_world_size
 
             from .distributed.xdit_context_parallel import (usp_attn_forward,
                                                             usp_dit_forward)
@@ -254,8 +254,8 @@ class WanT2V:
             if offload_model:
                 self.model.cpu()
                 torch.cuda.empty_cache()
-            if self.rank == 0:
-                videos = self.vae.decode(x0)
+
+            videos = self.vae.decode(x0)
 
         del noise, latents
         del sample_scheduler
@@ -265,4 +265,4 @@ class WanT2V:
         if dist.is_initialized():
             dist.barrier()
 
-        return videos[0] if self.rank == 0 else None
+        return videos[0]

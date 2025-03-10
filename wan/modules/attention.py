@@ -150,18 +150,18 @@ def attention(
 ):
     if torch.npu.is_available():
         qtype = q.dtype
-        q = q.to(torch.float16)
-        k = k.to(torch.float16)
-        v = v.to(torch.float16)
+        q = q.to(torch.bfloat16)
+        k = k.to(torch.bfloat16)
+        v = v.to(torch.bfloat16)
         scale = q.shape[-1] ** -0.5
-        x = torch_npu.npu_prompt_flash_attention(
+        return torch_npu.npu_prompt_flash_attention(
             q, k, v,
             num_heads=q.shape[1],
             input_layout="BNSD",
             scale_value=scale,
             pre_tokens=MAX_TOKEN,
             next_tokens=MAX_TOKEN
-        )
+        ).to(qtype)
     elif FLASH_ATTN_2_AVAILABLE or FLASH_ATTN_3_AVAILABLE:
         return flash_attention(
             q=q,

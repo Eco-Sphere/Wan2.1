@@ -13,6 +13,7 @@ import torch
 import torch_npu
 torch_npu.npu.set_compile_mode(jit_compile=False)
 torch.npu.config.allow_internal_format=False
+from torch_npu.contrib import transfer_to_npu
 import torch.distributed as dist
 from PIL import Image
 
@@ -20,6 +21,8 @@ import wan
 from wan.configs import WAN_CONFIGS, SIZE_CONFIGS, MAX_AREA_CONFIGS, SUPPORTED_SIZES
 from wan.utils.prompt_extend import DashScopePromptExpander, QwenPromptExpander
 from wan.utils.utils import cache_video, cache_image, str2bool
+
+from mindiesd import CacheConfig, CacheAgent
 
 EXAMPLE_PROMPT = {
     "t2v-1.3B": {
@@ -190,12 +193,24 @@ def _parse_args():
         type=float,
         default=5.0,
         help="Classifier free guidance scale.")
-
+    parser = add_attentioncache_args(parser)
     args = parser.parse_args()
 
     _validate_args(args)
 
     return args
+
+
+def add_attentioncache_args(parser: argparse.ArgumentParser):
+    group = parser.add_argument_group(title="Attention Cache args")
+
+    group.add_argument("--use_attentioncache", action='store_true')
+    group.add_argument("--attentioncache_ratio", type=float, default=1.2)
+    group.add_argument("--attentioncache_interval", type=int, default=4)
+    group.add_argument("--start_step", type=int, default=12)
+    group.add_argument("--end_step", type=int, default=27)
+
+    return parser
 
 
 def _init_logging(rank):
@@ -216,6 +231,8 @@ def generate(args):
     local_rank = int(os.getenv("LOCAL_RANK", 0))
     device = local_rank
     _init_logging(rank)
+    stream = torch.npu.Stream()
+
 
     if args.offload_model is None:
         args.offload_model = False if world_size > 1 else True
@@ -238,6 +255,7 @@ def generate(args):
 
     if args.ulysses_size > 1 or args.ring_size > 1:
         assert args.ulysses_size * args.ring_size == world_size, f"The number of ulysses_size and ring_size should be equal to the world size."
+        sys.path.append("./")
         from wan.distributed.parallel_mgr import (initialize_model_parallel,
                                              init_distributed_environment)
         init_distributed_environment(
@@ -316,8 +334,31 @@ def generate(args):
             t5_cpu=args.t5_cpu,
         )
 
-        logging.info(
-            f"Generating {'image' if 't2i' in args.task else 'video'} ...")
+        transformer = wan_t2v.model
+        if args.use_attentioncache:
+            config = CacheConfig(
+                method="attention_cache",
+                blocks_count=len(transformer.blocks),
+                steps_count=args.infer_steps,
+                step_start=args.start_step,
+                step_interval=args.attentioncache_interval,
+                step_end=args.end_step
+            )
+        else:
+            config = CacheConfig(
+                method="attention_cache",
+                blocks_count=len(transformer.blocks),
+                steps_count=args.infer_steps
+            )
+        cache = CacheAgent(config)
+        if args.dit_fsdp:
+            for block in transformer._fsdp_wrapped_module.blocks:
+                block._fsdp_wrapped_module.cache = cache
+        else:
+            for block in transformer.blocks:
+                block.cache = cache
+
+        logging.info("Generating {'image' if 't2i' in args.task else 'video'} ...")
         
         video = wan_t2v.generate(
             args.prompt,
@@ -330,7 +371,18 @@ def generate(args):
             seed=args.base_seed,
             offload_model=args.offload_model)
         
-        stream = torch.npu.Stream()
+        logging.info(f"Warm up 2 steps...")
+        video = wan_t2v.generate(
+            args.prompt,
+            size=SIZE_CONFIGS[args.size],
+            frame_num=args.frame_num,
+            shift=args.sample_shift,
+            sample_solver=args.sample_solver,
+            sampling_steps=2,
+            guide_scale=args.sample_guide_scale,
+            seed=args.base_seed,
+            offload_model=args.offload_model)
+        
         stream.synchronize()
         begin = time.time()
         video = wan_t2v.generate(
@@ -390,6 +442,19 @@ def generate(args):
             t5_cpu=args.t5_cpu,
         )
 
+        logging.info("Generating {'image' if 't2i' in args.task else 'video'} ...")
+        video = wan_i2v.generate(
+            args.prompt,
+            img,
+            max_area=MAX_AREA_CONFIGS[args.size],
+            frame_num=args.frame_num,
+            shift=args.sample_shift,
+            sample_solver=args.sample_solver,
+            sampling_steps=2,
+            guide_scale=args.sample_guide_scale,
+            seed=args.base_seed,
+            offload_model=args.offload_model)
+
         logging.info("Generating video ...")
         video = wan_i2v.generate(
             args.prompt,
@@ -424,7 +489,7 @@ def generate(args):
             cache_video(
                 tensor=video[None],
                 save_file=args.save_file,
-                fps=cfg.sample_fps,
+                fps= 24 if args.frame_num == 121 else cfg.sample_fps,
                 nrow=1,
                 normalize=True,
                 value_range=(-1, 1))

@@ -87,8 +87,7 @@ class WanI2V:
         self.patch_size = config.patch_size
         self.vae = WanVAE(
             vae_pth=os.path.join(checkpoint_dir, config.vae_checkpoint),
-            device=self.device,
-            dtype=self.param_dtype)
+            device=self.device)
 
         self.clip = CLIPModel(
             dtype=config.clip_dtype,
@@ -98,7 +97,7 @@ class WanI2V:
             tokenizer_path=os.path.join(checkpoint_dir, config.clip_tokenizer))
 
         logging.info(f"Creating WanModel from {checkpoint_dir}")
-        self.model = WanModel.from_pretrained(checkpoint_dir, torch_dtype=self.param_dtype)
+        self.model = WanModel.from_pretrained(checkpoint_dir)
         self.model.eval().requires_grad_(False)
 
         if t5_fsdp or dit_fsdp or use_usp:
@@ -196,24 +195,22 @@ class WanI2V:
         seed = seed if seed >= 0 else random.randint(0, sys.maxsize)
         seed_g = torch.Generator(device=self.device)
         seed_g.manual_seed(seed)
-
-        latent_frame_num = (F - 1) // self.vae_stride[0] + 1
         noise = torch.randn(
-            16, 
-            latent_frame_num, 
-            lat_h, 
-            lat_w, 
-            dtype = torch.float32, 
-            generator=seed_g, 
-            device = self.device)
+            16,
+            21,
+            lat_h,
+            lat_w,
+            dtype=torch.float32,
+            generator=seed_g,
+            device=self.device)
 
-        msk = torch.ones(1, latent_frame_num, lat_h, lat_w, device=self.device)
+        msk = torch.ones(1, 81, lat_h, lat_w, device=self.device)
         msk[:, 1:] = 0
         msk = torch.concat([
             torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]
         ],
                            dim=1)
-        msk = msk.view(1, latent_frame_num // 4, 4, lat_h, lat_w)
+        msk = msk.view(1, msk.shape[1] // 4, 4, lat_h, lat_w)
         msk = msk.transpose(1, 2)[0]
 
         if n_prompt == "":
@@ -242,7 +239,7 @@ class WanI2V:
                 torch.nn.functional.interpolate(
                     img[None].cpu(), size=(h, w), mode='bicubic').transpose(
                         0, 1),
-                torch.zeros(3, F - 1, h, w)
+                torch.zeros(3, 80, h, w)
             ],
                          dim=1).to(self.device)
         ])[0]
@@ -336,7 +333,8 @@ class WanI2V:
                 self.model.cpu()
                 torch.cuda.empty_cache()
 
-            videos = self.vae.decode(x0)
+            if self.rank == 0:
+                videos = self.vae.decode(x0)
 
         del noise, latent
         del sample_scheduler
@@ -346,4 +344,4 @@ class WanI2V:
         if dist.is_initialized():
             dist.barrier()
 
-        return videos[0]
+        return videos[0] if self.rank == 0 else None
