@@ -204,7 +204,7 @@ class xFuserLongContextAttention(LongContextAttention):
                             value_layer_list[i],
                             head_num=1,
                             input_layout="BNSD",
-                            scale=scale,
+                            scale=query.shape[-1]**-0.5,
                             pre_tockens=MAX_TOKEN,
                             next_tockens=MAX_TOKEN
                         )[0]
