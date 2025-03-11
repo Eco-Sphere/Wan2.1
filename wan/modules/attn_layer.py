@@ -12,7 +12,7 @@ except ImportError:
     raise ImportError("Please install yunchang 0.6.0 or later")
 from typing import Any
 from yunchang.comm.all_to_all import SeqAllToAll4D
-from .new_parallel import all_to_all_v1, all_to_all_v2
+from .new_parallel import all_to_all_v
 
 logger = logging.getLogger(__name__)
 MAX_TOKEN = 2147483647

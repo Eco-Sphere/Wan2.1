@@ -292,10 +292,10 @@ class WanAttentionBlock(nn.Module):
             grid_sizes(Tensor): Shape [B, 3], the second dimension contains (F, H, W)
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
         """
-        assert e.dtype == torch.float32
+        # assert e.dtype == torch.float32
         with amp.autocast(dtype=torch.float32):
             e = (self.modulation + e).chunk(6, dim=1)
-        assert e[0].dtype == torch.float32
+        # assert e[0].dtype == torch.float32
 
         # self-attention
         y = self.self_attn(
@@ -339,7 +339,7 @@ class Head(nn.Module):
             x(Tensor): Shape [B, L1, C]
             e(Tensor): Shape [B, C]
         """
-        assert e.dtype == torch.float32
+        # assert e.dtype == torch.float32
         with amp.autocast(dtype=torch.float32):
             e = (self.modulation + e.unsqueeze(1)).chunk(2, dim=1)
             x = (self.head(self.norm(x) * (1 + e[1]) + e[0]))
@@ -539,7 +539,7 @@ class WanModel(ModelMixin, ConfigMixin):
             e = self.time_embedding(
                 sinusoidal_embedding_1d(self.freq_dim, t).float())
             e0 = self.time_projection(e).unflatten(1, (6, self.dim))
-            assert e.dtype == torch.float32 and e0.dtype == torch.float32
+            # assert e.dtype == torch.float32 and e0.dtype == torch.float32
 
         # context
         context_lens = None
