@@ -22,7 +22,7 @@ class xFuserLongContextAttention(LongContextAttention):
 
     def __init__(
         self,
-        args: Any,
+        # args: Any,
         scatter_idx: int = 2,
         gather_idx: int = 1,
         ring_impl_type: str = "basic",
@@ -54,7 +54,7 @@ class xFuserLongContextAttention(LongContextAttention):
                 f"ring_impl_type: {ring_impl_type} do not support SP kv cache."
             )
         self.world_size = dist.get_world_size()
-        self.args = args
+        # self.args = args
         self.video_size = [[720, 1280], [1280, 720], [960, 960]]
 
         self.algo = 0
@@ -171,7 +171,7 @@ class xFuserLongContextAttention(LongContextAttention):
                     qkv = SeqAllToAll4D.apply(
                         self.ulysses_pg, qkv, self.scatter_idx, self.gather_idx
                     )
-                    qkv = torch.chunk(qkv, dim=0)
+                    qkv = torch.chunk(qkv, 3, dim=0)
                     query_layer, key_layer, value_layer = qkv
                 else:
                     query_layer = SeqAllToAll4D.apply(
@@ -212,11 +212,11 @@ class xFuserLongContextAttention(LongContextAttention):
                         q_seqlen = query_layer_list[0].shape[2]
                         q_dtype = query_layer.dtype
                         pad_size = ((q_seqlen // 256) + 1) * 256 - q_seqlen
-                        height_padding = torch.zeros([query_layer_list[0].shape[0], query_layer_list[0].shape[1], pad_size,
-                                                      query_layer_list[0].shape[2]], dtype=q_dtype, device=query_layer.device)
-                        query = torch.cat([query_layer_list[i], height_padding], dim = -2).to(torch.float16)
-                        key = torch.cat([key_layer_list[i], height_padding], dim = -2).to(torch.float16)
-                        value = torch.cat([value_layer_list[i], height_padding], dim = -2).to(torch.float16)
+                        height_padding = torch.zeros([query_layer_list[i].shape[0], query_layer_list[i].shape[1], pad_size,
+                                                      query_layer_list[i].shape[2]], dtype=q_dtype, device=query_layer.device)
+                        query = torch.cat([query_layer_list[i], height_padding], dim=-2).to(torch.float16)
+                        key = torch.cat([key_layer_list[i], height_padding], dim=-2).to(torch.float16)
+                        value = torch.cat([value_layer_list[i], height_padding], dim=-2).to(torch.float16)
 
                         _, out = torch.ops.mindie.la_mindie_sd(query, key, value, None, None, None, \
                             query_layer.shape[-1]**-0.5, 1, "BNSD", 1.0, MAX_TOKEN, 1, True)
@@ -245,7 +245,7 @@ class xFuserLongContextAttention(LongContextAttention):
                 joint_tensor_value,
                 2,
                 1,
-                scale=query_layer.shape[-1]**-0.5,
+                scale=query.shape[-1]**-0.5,
                 algo = self.algo,
                 self_attention = self.self_attention)
         return output
