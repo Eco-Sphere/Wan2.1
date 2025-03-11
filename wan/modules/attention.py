@@ -156,7 +156,7 @@ def attention(
         scale = q.shape[-1] ** -0.5
         return torch_npu.npu_prompt_flash_attention(
             q, k, v,
-            num_heads=q.shape[1],
+            num_heads=q.shape[2],
             input_layout="BSND",
             scale_value=scale,
             pre_tokens=MAX_TOKEN,
