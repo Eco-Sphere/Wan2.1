@@ -298,7 +298,8 @@ class WanAttentionBlock(nn.Module):
         # assert e[0].dtype == torch.float32
 
         # self-attention
-        y = self.self_attn(
+        y = self.cache.apply(
+            self.self_attn,
             self.norm1(x).float() * (1 + e[1]) + e[0], seq_lens, grid_sizes,
             freqs)
         with amp.autocast(dtype=torch.float32):
