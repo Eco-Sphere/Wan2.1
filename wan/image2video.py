@@ -213,7 +213,7 @@ class WanI2V:
             torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]
         ],
                            dim=1)
-        msk = msk.view(1, latent_frame_num // 4, 4, lat_h, lat_w)
+        msk = msk.view(1, latent_frame_num, 4, lat_h, lat_w)
         msk = msk.transpose(1, 2)[0]
 
         if n_prompt == "":
