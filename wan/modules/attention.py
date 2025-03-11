@@ -146,7 +146,7 @@ def attention(
     window_size=(-1, -1),
     deterministic=False,
     dtype=torch.bfloat16,
-    fa_version=None,
+    version=None,
 ):
     if torch.npu.is_available():
         qtype = q.dtype
