@@ -341,7 +341,7 @@ def generate(args):
             config = CacheConfig(
                 method="attention_cache",
                 blocks_count=len(transformer.blocks),
-                steps_count=args.infer_steps,
+                steps_count=args.sample_steps,
                 step_start=args.start_step,
                 step_interval=args.attentioncache_interval,
                 step_end=args.end_step
@@ -350,7 +350,7 @@ def generate(args):
             config = CacheConfig(
                 method="attention_cache",
                 blocks_count=len(transformer.blocks),
-                steps_count=args.infer_steps
+                steps_count=args.sample_steps
             )
         cache = CacheAgent(config)
         if args.dit_fsdp:
@@ -450,7 +450,7 @@ def generate(args):
             config = CacheConfig(
                 method="attention_cache",
                 blocks_count=len(transformer.blocks),
-                steps_count=args.infer_steps,
+                steps_count=args.sample_steps,
                 step_start=args.start_step,
                 step_interval=args.attentioncache_interval,
                 step_end=args.end_step
@@ -459,7 +459,7 @@ def generate(args):
             config = CacheConfig(
                 method="attention_cache",
                 blocks_count=len(transformer.blocks),
-                steps_count=args.infer_steps
+                steps_count=args.sample_steps
             )
         cache = CacheAgent(config)
         if args.dit_fsdp:
