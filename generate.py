@@ -233,7 +233,6 @@ def generate(args):
     _init_logging(rank)
     stream = torch.npu.Stream()
 
-
     if args.offload_model is None:
         args.offload_model = False if world_size > 1 else True
         logging.info(
@@ -395,8 +394,9 @@ def generate(args):
             guide_scale=args.sample_guide_scale,
             seed=args.base_seed,
             offload_model=args.offload_model)
+        stream.synchronize()
         end = time.time()
-        logging.info(f"Generate image using time: {end - begin} s")
+        logging.info(f"Generating video used time {end - begin: .4f}s")
 
     else:
         if args.prompt is None:
@@ -456,6 +456,8 @@ def generate(args):
             offload_model=args.offload_model)
 
         logging.info("Generating video ...")
+        stream.synchronize()
+        begin = time.time()
         video = wan_i2v.generate(
             args.prompt,
             img,
@@ -467,6 +469,10 @@ def generate(args):
             guide_scale=args.sample_guide_scale,
             seed=args.base_seed,
             offload_model=args.offload_model)
+        stream.synchronize()
+        end = time.time()
+        logging.info(f"Generating video used time {end - begin: .4f}s")
+
 
     if rank == 0:
         if args.save_file is None:
