@@ -70,7 +70,7 @@ def all_to_all_v(
                 value_layer_list[i],
                 head_num=1,
                 input_layout="BNSD",
-                scale=scale,
+                scale=query_layer_list[i].shape[-1]**-0.5,
                 pre_tockens=MAX_TOKEN,
                 next_tockens=MAX_TOKEN
             )[0]
@@ -81,7 +81,7 @@ def all_to_all_v(
     output_shape = [b, SEQ[0], each_n, d] if rank < world_size - 1 else [b, SEQ[-1], each_n, d]
     output_list = [torch.empty(output_shape, device=output.device, dtype=output.dtype) for _ in SEQ]
 
-    SEQ_joint = [i  for i in SEQ]
+    SEQ_joint = [i for i in SEQ]
     output_con = [chunk.contiguous() for chunk in torch.split(output, SEQ_joint, dim=gather_dim)]
 
     dist.all_to_all(output_list, output_con)

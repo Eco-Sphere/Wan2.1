@@ -445,6 +445,30 @@ def generate(args):
             t5_cpu=args.t5_cpu,
         )
 
+        transformer = wan_i2v.model
+        if args.use_attentioncache:
+            config = CacheConfig(
+                method="attention_cache",
+                blocks_count=len(transformer.blocks),
+                steps_count=args.infer_steps,
+                step_start=args.start_step,
+                step_interval=args.attentioncache_interval,
+                step_end=args.end_step
+            )
+        else:
+            config = CacheConfig(
+                method="attention_cache",
+                blocks_count=len(transformer.blocks),
+                steps_count=args.infer_steps
+            )
+        cache = CacheAgent(config)
+        if args.dit_fsdp:
+            for block in transformer._fsdp_wrapped_module.blocks:
+                block._fsdp_wrapped_module.cache = cache
+        else:
+            for block in transformer.blocks:
+                block.cache = cache
+        
         logging.info(f"Warm up 2 steps...")
         video = wan_i2v.generate(
             args.prompt,
