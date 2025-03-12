@@ -147,6 +147,7 @@ class xFuserLongContextAttention(LongContextAttention):
 
             if use_all_head:
                 if self.algo == 0:
+                    print("="*100)
                     out = torch_npu.npu_fusion_attention(
                             query_layer,
                             key_layer,
@@ -190,11 +191,11 @@ class xFuserLongContextAttention(LongContextAttention):
                             next_tockens=MAX_TOKEN
                         )[0]
                     elif self.algo == 1:
-                        q_seqlen = query_layer_list[0].shape[2]
+                        q_seqlen = query_layer_list[i].shape[2]
                         q_dtype = query_layer.dtype
-                        head_dim = query_layer.shape[-1]
+                        head_dim = query_layer_list[i].shape[-1]
 
-                        query, key, value = la_preprocess_input(query_layer, key_layer, value_layer)
+                        query, key, value = la_preprocess_input(query_layer_list[i], key_layer_list[i], value_layer_list[i])
                         _, out = torch.ops.mindie.la_mindie_sd(query, key, value, None, None, None, \
                             query_layer.shape[-1]**-0.5, 1, "BNSD", 1.0, MAX_TOKEN, 1, True)
                         out = la_postprocess_output(out, q_dtype, q_seqlen, head_dim)
