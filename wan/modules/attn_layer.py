@@ -152,7 +152,6 @@ class xFuserLongContextAttention(LongContextAttention):
 
             if use_all_head:
                 if self.algo == 0:
-                    print("="*100)
                     out = torch_npu.npu_fusion_attention(
                             query_layer,
                             key_layer,
