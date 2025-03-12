@@ -72,11 +72,11 @@ pip install torch_npu-{pytorchversion}.xxxx.{arch}.whl
 ```
 3. Wan2.1-I2V-480P权重链接:
 ```shell
-   https://huggingface.co/Wan-AI/Wan2.1-I2V-480P
+   https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P
 ```
 4. Wan2.1-I2V-720P权重链接
 ```shell
-   https://huggingface.co/Wan-AI/Wan2.1-I2V-720P
+   https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-720P
 ```
 
 ## 三、Wan2.1使用
