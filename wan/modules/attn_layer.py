@@ -181,7 +181,7 @@ class xFuserLongContextAttention(LongContextAttention):
                         raise ValueError(f"select flash attention algorithm only support 0, 1, but got f{self.algo}")
 
                     output.append(out)
-                out = torch.cat(output, dim=1)
+                out = torch.cat(output, dim=2)
 
             if type(out) == tuple:
                 context_layer, _, _ = out
