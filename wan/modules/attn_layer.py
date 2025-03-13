@@ -12,7 +12,7 @@ except ImportError:
     raise ImportError("Please install yunchang 0.6.0 or later")
 from typing import Any
 from yunchang.comm.all_to_all import SeqAllToAll4D
-from .new_parallel import all_to_all_v1, all_to_all_v2, pad, la_preprocess_input, la_postprocess_output
+from .new_parallel import all_to_all_v1, all_to_all_v2
 
 import mindiesd
 from mindiesd.layers.flash_attn.attention_forward import attention_forward
@@ -111,8 +111,8 @@ class xFuserLongContextAttention(LongContextAttention):
         """
 
         all_gather = False
-        use_all_head = True
-        # use_la = False
+        # use_all_head = True
+        use_la = False
         # if self.args.video_size in self.video_size:
         #     all_gather = False
         # else:
@@ -165,11 +165,11 @@ class xFuserLongContextAttention(LongContextAttention):
                     raise ValueError(f"select flash attention algorithm only support 0, 1, but got f{self.algo}")
 
             else:
-                query_layer_list = query_layer.split(1, dim=1)
-                key_layer_list = key_layer.split(1, dim=1)
-                value_layer_list = value_layer.split(1, dim=1)
+                query_layer_list = query_layer.split(1, dim=2)
+                key_layer_list = key_layer.split(1, dim=2)
+                value_layer_list = value_layer.split(1, dim=2)
                 output = []
-                for_loop = query_layer.shape[1]
+                for_loop = query_layer.shape[2]
                 for i in range(for_loop):
                     if self.algo == 0:
                         out = attention_forward(query_layer_list[i], key_layer_list[i], value_layer_list[i],
@@ -181,8 +181,7 @@ class xFuserLongContextAttention(LongContextAttention):
                         raise ValueError(f"select flash attention algorithm only support 0, 1, but got f{self.algo}")
 
                     output.append(out)
-                out_concat = torch.cat(output, dim=1)
-                out = out_concat.transpose(1, 2)
+                out = torch.cat(output, dim=1)
 
             if type(out) == tuple:
                 context_layer, _, _ = out

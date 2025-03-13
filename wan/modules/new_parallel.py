@@ -16,6 +16,8 @@
 import torch
 import torch_npu
 import torch.distributed as dist
+from mindiesd.layers.flash_attn.attention_forward import attention_forward
+
 
 MAX_TOKEN = 2147483647
 
@@ -48,39 +50,25 @@ def all_to_all_v1(
     dist.all_to_all(output_k_list, k_list)
     dist.all_to_all(output_v_list, v_list)
 
-    query = torch.cat(output_q_list, dim=gather_dim).contiguous().transpose(1, 2)
-    key = torch.cat(output_k_list, dim=gather_dim).contiguous().transpose(1, 2)
-    value = torch.cat(output_v_list, dim=gather_dim).contiguous().transpose(1, 2)
-    query_layer_list = query.split(1, dim=1)
-    key_layer_list = key.split(1, dim=1)
-    value_layer_list = value.split(1, dim=1)
+    query = torch.cat(output_q_list, dim=gather_dim).contiguous()
+    key = torch.cat(output_k_list, dim=gather_dim).contiguous()
+    value = torch.cat(output_v_list, dim=gather_dim).contiguous()
+    query_layer_list = query.split(1, dim=2)
+    key_layer_list = key.split(1, dim=2)
+    value_layer_list = value.split(1, dim=2)
     output = []
-    for_loop = query.shape[1]
+    for_loop = query.shape[2]
     for i in range(for_loop):
         if algo == 0:
-            out = torch_npu.npu_fusion_attention(
-                query_layer_list[i],
-                key_layer_list[i],
-                value_layer_list[i],
-                head_num=1,
-                input_layout="BNSD",
-                scale=query.shape[-1]**-0.5,
-                pre_tockens=MAX_TOKEN,
-                next_tockens=MAX_TOKEN
-            )[0]
+            out = attention_forward(query_layer_list[i], key_layer_list[i], value_layer_list[i],
+                                opt_mode="manual", op_type="fused_attn_score", layout="BNSD")
         elif algo == 1:
-            q_seqlen = query_layer_list[0].shape[2]
-            q_dtype = query.dtype
-            head_dim = query.shape[-1]
-
-            query, key, value = la_preprocess_input(query, key, value)
-            _, out = torch.ops.mindie.la_mindie_sd(query, key, value, None, None, None, \
-                query.shape[-1]**-0.5, 1, "BNSD", 1.0, MAX_TOKEN, 1, True)
-            out = la_postprocess_output(out, q_dtype, q_seqlen, head_dim)
-
+            out = attention_forward(query_layer_list[i], key_layer_list[i], value_layer_list[i],
+                                opt_mode="manual", op_type="ascend_laser_attention", layout="BNSD")
+        else:
+            raise ValueError(f"select flash attention algorithm only support 0, 1, but got f{algo}")
         output.append(out)
-    output = torch.cat(output, dim=1)
-    output = output.transpose(1, 2)
+    output = torch.cat(output, dim=2)
 
     output_shape = [b, SEQ[0], each_n, d] if rank < world_size - 1 else [b, SEQ[-1], each_n, d]
     output_list = [torch.empty(output_shape, device=output.device, dtype=output.dtype) for _ in SEQ]
@@ -128,7 +116,7 @@ def all_to_all_v2(
     dist.all_to_all(output_k_list, k_list, group=ulysses_pg)
     dist.all_to_all(output_v_list, v_list, group=ulysses_pg)
 
-    query_layer = torch.cat(output_q_list, dim=gather_dim).contiguous().transpose(1, 2)
+    query_layer = torch.cat(output_q_list, dim=gather_dim).contiguous()
     key = torch.cat(output_k_list, dim=gather_dim).contiguous()
     value = torch.cat(output_v_list, dim=gather_dim).contiguous()
 
@@ -149,27 +137,11 @@ def all_to_all_v2(
     value_layer = v_full[:, :sum(SEQ), :, :]
 
     if algo == 0:
-        out = torch_npu.npu_fusion_attention(
-            query_layer,
-            key_layer,
-            value_layer,
-            head_num=query_layer.shape[1],
-            input_layout="BNSD",
-            scale=query_layer.shape[-1]**-0.5,
-            pre_tockens=MAX_TOKEN,
-            next_tockens=MAX_TOKEN
-        )[0]
-        out = out.transpose(1, 2)
+        out = attention_forward(query_layer, key_layer, value_layer,
+                                opt_mode="manual", op_type="fused_attn_score", layout="BNSD")
     elif algo == 1:
-        q_seqlen = query_layer.shape[2]
-        q_dtype = query_layer.dtype
-        head_dim = query_layer.shape[-1]
-
-        query, key, value = la_preprocess_input(query_layer, key_layer, value_layer)
-        _, out = torch.ops.mindie.la_mindie_sd(query, key, value, None, None, None, \
-            query_layer.shape[-1]**-0.5, 5, "BNSD", 1.0, MAX_TOKEN, 1, True)
-        out = la_postprocess_output(out, q_dtype, q_seqlen, head_dim)
-        out = out.transpose(1, 2)
+        out = attention_forward(query_layer, key_layer, value_layer,
+                                opt_mode="manual", op_type="ascend_laser_attention", layout="BNSD")
     else:
         raise ValueError(f"select flash attention algorithm only support 0, 1, but got f{algo}")
 
