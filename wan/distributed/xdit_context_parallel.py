@@ -19,8 +19,9 @@ def pad_freqs(original_tensor, target_len):
         pad_size,
         s1,
         s2,
-        dtype=original_tensor.dtype,
-        ).to(original_tensor.device)
+        dtype=torch.float32,
+        device=original_tensor.device
+        ).to(original_tensor.dtype)
     padded_tensor = torch.cat([original_tensor, padding_tensor], dim=0)
     return padded_tensor
 

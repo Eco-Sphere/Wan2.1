@@ -14,6 +14,9 @@ from typing import Any
 from yunchang.comm.all_to_all import SeqAllToAll4D
 from .new_parallel import all_to_all_v1, all_to_all_v2, pad, la_preprocess_input, la_postprocess_output
 
+import mindiesd
+from mindiesd.layers.flash_attn.attention_forward import attention_forward
+
 logger = logging.getLogger(__name__)
 MAX_TOKEN = 2147483647
 
@@ -59,8 +62,7 @@ class xFuserLongContextAttention(LongContextAttention):
 
         self.algo = int(os.getenv('ALGO', 0))
         if self.algo == 1:
-            import mindiesd
-            from mindiesd.layers.flash_attn.attention_forward import attention_forward
+            
             mindiesd_plugin_path = os.path.join(mindiesd.__path__[0], 'plugin/libPTAExtensionOPS.so')
 
             if os.path.exists(mindiesd_plugin_path):
