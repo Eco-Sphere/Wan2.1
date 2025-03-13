@@ -39,7 +39,7 @@ def rope_apply(x, grid_sizes, freqs_list):
     output = []
     for i, (f, h, w) in enumerate(grid_sizes.tolist()):
         # precompute multipliers
-        x_i = torch.view_as_complex(x[i, :s].to(torch.float64).reshape(
+        x_i = torch.view_as_complex(x[i, :s].to(torch.float32).reshape(
             s, n, -1, 2))
         freqs_i_rank = freqs_list[i]
         # apply rotary embedding
@@ -88,10 +88,10 @@ def usp_dit_forward(
     ])
 
     # time embeddings
-    with amp.autocast(dtype=torch.float32):
-        e = self.time_embedding(
-            sinusoidal_embedding_1d(self.freq_dim, t).float())
-        e0 = self.time_projection(e).unflatten(1, (6, self.dim))
+    # with amp.autocast(dtype=torch.float32):
+    e = self.time_embedding(
+        sinusoidal_embedding_1d(self.freq_dim, t).float())
+    e0 = self.time_projection(e).unflatten(1, (6, self.dim))
         # assert e.dtype == torch.float32 and e0.dtype == torch.float32
 
     # context
