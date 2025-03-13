@@ -354,7 +354,7 @@ def generate(args):
         if args.dit_fsdp:
             for block in transformer._fsdp_wrapped_module.blocks:
                 block._fsdp_wrapped_module.cache = cache
-                block.args = args
+                block._fsdp_wrapped_module.args = args
         else:
             for block in transformer.blocks:
                 block.cache = cache
@@ -465,7 +465,7 @@ def generate(args):
         if args.dit_fsdp:
             for block in transformer._fsdp_wrapped_module.blocks:
                 block._fsdp_wrapped_module.cache = cache
-                block.args = args
+                block._fsdp_wrapped_module.args = args
         else:
             for block in transformer.blocks:
                 block.cache = cache
