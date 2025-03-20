@@ -238,10 +238,8 @@ torchrun --nproc_per_node=8 generate.py \
 --task i2v-14B \
 --size 720*480 \
 --ckpt_dir ${model_base} \
---frame_num 121 \
+--frame_num 61 \
 --sample_steps 30 \
---dit_fsdp \
---t5_fsdp \
 --cfg_size 2 \
 --ulysses_size 4 \
 --image examples/i2v_input.JPG \
