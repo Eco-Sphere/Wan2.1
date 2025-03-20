@@ -150,25 +150,6 @@ torchrun --nproc_per_node=8 generate.py \
 - ALGO: 为0表示默认FA算子；设置为1表示使用高性能FA算子
 - ulysses_size: ulysses并行数
 
-#### 3.3.2 16卡性能测试
-执行命令：
-```shell
-export ALGO=0
-torchrun --nproc_per_node=16 generate.py \
---task t2v-14B \
---size 1280*720 \
---ckpt_dir ${model_base} \
---dit_fsdp \
---t5_fsdp \
---ring_size 2 \
---ulysses_size 8 \
---prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
-```
-
-参数说明：
-- ALGO: 为0表示默认FA算子；设置为1表示使用高性能FA算子
-- ring_size: ring并行数
-
 ### 3.4 Wan2.1-I2V-14B
 使用上一步下载的权重
 ```shell
@@ -208,27 +189,6 @@ torchrun --nproc_per_node=8 generate.py \
 - ulysses_size: ulysses并行数
 - image: 用于生成视频的图片路径
 - prompt: 文本提示词
-
-#### 3.4.1.2 16卡性能测试
-执行命令：
-```shell
-export ALGO=0
-torchrun --nproc_per_node=16 generate.py \
---task i2v-14B \
---size 832*480 \
---ckpt_dir ${model_base} \
---frame_num 81 \
---sample_steps 40 \
---dit_fsdp \
---t5_fsdp \
---ring_size 2 \
---ulysses_size 8 \
---image examples/i2v_input.JPG \
---prompt "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's intricate details and the refreshing atmosphere of the seaside."
-```
-参数说明：
-- ALGO: 为0表示默认FA算子；设置为1表示使用高性能FA算子
-- ring_size: ring并行数
 
 #### 3.4.2 算法优化
 执行命令：
