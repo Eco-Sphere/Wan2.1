@@ -3,8 +3,8 @@ import torch
 import torch.cuda.amp as amp
 from .parallel_mgr import (get_sequence_parallel_rank,
                             get_sequence_parallel_world_size,
+                            get_sp_group,
                             )
-from ..modules.new_parallel import gather_sequence, split_sequence
 from ..modules.attn_layer import xFuserLongContextAttention
 
 from ..modules.model import sinusoidal_embedding_1d
@@ -88,10 +88,10 @@ def usp_dit_forward(
     ])
 
     # time embeddings
-    # with amp.autocast(dtype=torch.float32):
-    e = self.time_embedding(
-        sinusoidal_embedding_1d(self.freq_dim, t).float())
-    e0 = self.time_projection(e).unflatten(1, (6, self.dim))
+    with amp.autocast(dtype=torch.float32):
+        e = self.time_embedding(
+            sinusoidal_embedding_1d(self.freq_dim, t).float())
+        e0 = self.time_projection(e).unflatten(1, (6, self.dim))
         # assert e.dtype == torch.float32 and e0.dtype == torch.float32
 
     # context
@@ -107,7 +107,9 @@ def usp_dit_forward(
         context = torch.concat([context_clip, context], dim=1)
 
     # Context Parallel
-    x = split_sequence(x, dim=1)
+    x = torch.chunk(
+        x, get_sequence_parallel_world_size(),
+        dim=1)[get_sequence_parallel_rank()]
 
     c = (self.dim // self.num_heads) // 2
     s = x.shape[1]
@@ -149,7 +151,7 @@ def usp_dit_forward(
     x = self.head(x, e)
 
     # Context Parallel
-    x = gather_sequence(x)
+    x = get_sp_group().all_gather(x, dim=1)
 
     # unpatchify
     x = self.unpatchify(x, grid_sizes)

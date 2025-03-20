@@ -21,6 +21,7 @@ import wan
 from wan.configs import WAN_CONFIGS, SIZE_CONFIGS, MAX_AREA_CONFIGS, SUPPORTED_SIZES
 from wan.utils.prompt_extend import DashScopePromptExpander, QwenPromptExpander
 from wan.utils.utils import cache_video, cache_image, str2bool
+from wan.distributed.parallel_mgr import ParallelConfig, init_parallel_env
 
 from mindiesd import CacheConfig, CacheAgent
 
@@ -109,6 +110,11 @@ def _parse_args():
         default=None,
         help="Whether to offload the model to CPU after each model forward, reducing GPU memory usage."
     )
+    parser.add_argument(
+        "--sfg_size",
+        type=int,
+        default=1,
+        help="The size of the cfg parallelism in DiT.")
     parser.add_argument(
         "--ulysses_size",
         type=int,
@@ -250,26 +256,20 @@ def generate(args):
             args.t5_fsdp or args.dit_fsdp
         ), f"t5_fsdp and dit_fsdp are not supported in non-distributed environments."
         assert not (
-            args.ulysses_size > 1 or args.ring_size > 1
+            args.cfg_size > 1 or args.ulysses_size > 1 or args.ring_size > 1
         ), f"context parallel are not supported in non-distributed environments."
 
-    if args.ulysses_size > 1 or args.ring_size > 1:
-        assert args.ulysses_size * args.ring_size == world_size, f"The number of ulysses_size and ring_size should be equal to the world size."
-        sys.path.append("./")
-        from wan.distributed.parallel_mgr import (initialize_model_parallel,
-                                             init_distributed_environment)
-        init_distributed_environment(
-            rank=dist.get_rank(),
-            world_size=dist.get_world_size(),
-            backend="hccl",
-            )
-
-        initialize_model_parallel(
-            sequence_parallel_degree=dist.get_world_size(),
-            ring_degree=args.ring_size,
+    if args.cfg_size > 1 or args.ulysses_size > 1 or args.ring_size > 1:
+        assert args.cfg_size * args.ulysses_size * args.ring_size == world_size, f"The number of ulysses_size and ring_size should be equal to the world size."
+        sp_degree = args.ulysses_size * args.ring_size
+        parallel_config = ParallelConfig(
+            sp_degree=sp_degree,
             ulysses_degree=args.ulysses_size,
-            backend="hccl",
+            ring_degree=args.ring_size,
+            use_cfg_parallel=(args.cfg_size==2),
+            world_size=world_size,
         )
+        init_parallel_env(parallel_config)
 
     if args.use_prompt_extend:
         if args.prompt_extend_method == "dashscope":
@@ -496,7 +496,7 @@ def generate(args):
             formatted_prompt = args.prompt.replace(" ", "_").replace("/",
                                                                      "_")[:50]
             suffix = '.png' if "t2i" in args.task else '.mp4'
-            args.save_file = f"{args.task}_{args.size.replace('*','x') if sys.platform=='win32' else args.size}_{args.ulysses_size}_{args.ring_size}_{formatted_prompt}_{formatted_time}" + suffix
+            args.save_file = f"{args.task}_{args.size.replace('*','x') if sys.platform=='win32' else args.size}_{args.ulysses_size}_{args.ulysses_size}_{args.ring_size}_{formatted_prompt}_{formatted_time}" + suffix
 
         if "t2i" in args.task:
             logging.info(f"Saving generated image to {args.save_file}")
@@ -511,7 +511,7 @@ def generate(args):
             cache_video(
                 tensor=video[None],
                 save_file=args.save_file,
-                fps= 24 if args.frame_num == 121 else cfg.sample_fps,
+                fps= 12 if args.frame_num == 61 else cfg.sample_fps,
                 nrow=1,
                 normalize=True,
                 value_range=(-1, 1))

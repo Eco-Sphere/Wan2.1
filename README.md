@@ -234,7 +234,7 @@ torchrun --nproc_per_node=16 generate.py \
 执行命令：
 ```shell
 export ALGO=0
-torchrun --nproc_per_node=16 generate.py \
+torchrun --nproc_per_node=8 generate.py \
 --task i2v-14B \
 --size 720*480 \
 --ckpt_dir ${model_base} \
@@ -242,8 +242,8 @@ torchrun --nproc_per_node=16 generate.py \
 --sample_steps 30 \
 --dit_fsdp \
 --t5_fsdp \
---ring_size 2 \
---ulysses_size 8 \
+--cfg_size 2 \
+--ulysses_size 4 \
 --image examples/i2v_input.JPG \
 --prompt "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's intricate details and the refreshing atmosphere of the seaside." \
 --use_attentioncache \
@@ -253,6 +253,8 @@ torchrun --nproc_per_node=16 generate.py \
 ```
 参数说明：
 - ALGO: 为0表示默认FA算子；设置为1表示使用高性能FA算子
+- cfg_size: cfg并行数
+- ulysses_size: ulysses并行数
 - use_attentioncache: 使能attentioncache策略
 - start_step: cache开始的step
 - attentioncache_interval: 连续cache数

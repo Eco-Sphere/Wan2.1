@@ -25,6 +25,13 @@ from .utils.fm_solvers import (FlowDPMSolverMultistepScheduler,
                                get_sampling_sigmas, retrieve_timesteps)
 from .utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
 
+from wan.distributed.parallel_mgr import (
+    get_sequence_parallel_world_size,
+    get_classifier_free_guidance_world_size,
+    get_classifier_free_guidance_rank,
+    get_cfg_group,
+)
+
 
 class WanI2V:
 
@@ -105,8 +112,6 @@ class WanI2V:
             init_on_cpu = False
 
         if use_usp:
-            from .distributed.parallel_mgr import get_sequence_parallel_world_size
-
             from .distributed.xdit_context_parallel import (usp_attn_forward,
                                                             usp_dit_forward)
             for block in self.model.blocks:
@@ -295,6 +300,13 @@ class WanI2V:
                 'y': [y],
             }
 
+            arg_all = {
+                'context': [context[0]] if get_classifier_free_guidance_rank==0 else context_null,
+                'clip_fea': clip_context,
+                'seq_len': max_seq_len,
+                'y': [y],
+            }
+
             if offload_model:
                 torch.cuda.empty_cache()
 
@@ -305,16 +317,26 @@ class WanI2V:
 
                 timestep = torch.stack(timestep).to(self.device)
 
-                noise_pred_cond = self.model(
-                    latent_model_input, t=timestep, **arg_c)[0].to(
-                        torch.device('cpu') if offload_model else self.device)
-                if offload_model:
-                    torch.cuda.empty_cache()
-                noise_pred_uncond = self.model(
-                    latent_model_input, t=timestep, **arg_null)[0].to(
-                        torch.device('cpu') if offload_model else self.device)
-                if offload_model:
-                    torch.cuda.empty_cache()
+                if get_classifier_free_guidance_world_size() == 2:
+                    noise_pred_cond = self.model(
+                        latent_model_input, t=timestep, **arg_all)[0].to(
+                            torch.device('cpu') if offload_model else self.device)
+                    noise_pred_cond, noise_pred_uncond = get_cfg_group().all_gather(
+                        noise_pred, separate_tensors=True
+                    )
+                    if offload_model:
+                        torch.cuda.empty_cache()
+                else:
+                    noise_pred_cond = self.model(
+                        latent_model_input, t=timestep, **arg_c)[0].to(
+                            torch.device('cpu') if offload_model else self.device)
+                    if offload_model:
+                        torch.cuda.empty_cache()
+                    noise_pred_uncond = self.model(
+                        latent_model_input, t=timestep, **arg_null)[0].to(
+                            torch.device('cpu') if offload_model else self.device)
+                    if offload_model:
+                        torch.cuda.empty_cache()
                 noise_pred = noise_pred_uncond + guide_scale * (
                     noise_pred_cond - noise_pred_uncond)
 
