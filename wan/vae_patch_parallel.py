@@ -36,6 +36,7 @@ class Parallel_VAE_SP:
         # Create communication groups
         self._create_group_by_row()
         self._create_group_by_col()
+        self._row_col_to_global_rank()
         
         self.ori_conv3d = None
 
@@ -61,13 +62,24 @@ class Parallel_VAE_SP:
                 if c == self.col_rank:
                     self.col_group = col_group
 
+    def _row_col_to_global_rank(self):
+        # Create rank mappings for communication
+        self.row_to_global_rank = {
+            r: r * self.w_split + self.col_rank 
+            for r in range(self.h_split)
+        }
+        self.col_to_global_rank = {
+            c: self.row_rank * self.w_split + c 
+            for c in range(self.w_split)
+        }
+
     def __call__(self, x):
         """Split input tensor across last two dimensions"""
         x = x.chunk(self.w_split, dim=-1)[self.col_rank]
         x = x.chunk(self.h_split, dim=-2)[self.row_rank]
         return x
 
-    def patch(self, x):
+    def patch(self, x, return_lst = False):
         """
         Partition input tensor into grid blocks and record partition shapes
         
@@ -78,7 +90,7 @@ class Parallel_VAE_SP:
             torch.Tensor: Local partition tensor for current process
         """
         # Get input dimensions
-        batch_size, channels, time_steps, height, width = x.shape
+        height, width = x.shape[-2:]
         
         # Calculate base partition dimensions
         base_patch_height = height // self.h_split
@@ -101,23 +113,13 @@ class Parallel_VAE_SP:
                 end_w = start_w + patch_width
                 
                 # Extract partition
-                patch = x[:, :, :, start_h:end_h, start_w:end_w]
-                patches.append(patch)
+                patch = x[..., start_h:end_h, start_w:end_w]
+                patches.append(patch.contiguous())
         
         # Get local partition
         local_patch = patches[self.rank]
-        
-        # Create rank mappings for communication
-        self.row_to_global_rank = {
-            r: r * self.w_split + self.col_rank 
-            for r in range(self.h_split)
-        }
-        self.col_to_global_rank = {
-            c: self.row_rank * self.w_split + c 
-            for c in range(self.w_split)
-        }
-        
-        return local_patch 
+
+        return patches if return_lst else local_patch
 
     def dispatch(self, local_patch):
         """
@@ -158,7 +160,7 @@ class Parallel_VAE_SP:
                 
         total_h = sum(row_heights.values())
         total_w = sum(col_widths.values())
-        
+        # TODO dispatch should be release to process the [B C W H]
         # Prepare buffers for data gathering
         batch_size, channels, time_steps = local_patch.shape[:3]
         gathered_data = [
@@ -168,10 +170,10 @@ class Parallel_VAE_SP:
                 dtype=local_patch.dtype
             ) for h_part, w_part in all_shapes
         ]
-        
+
         # Second all-gather to collect partition data
         dist.all_gather(gathered_data, local_patch.clone())
-        
+
         # Reconstruct full tensor
         full_tensor = torch.empty(
             (batch_size, channels, time_steps, total_h, total_w),
@@ -327,9 +329,10 @@ class Parallel_VAE_SP:
             # Validate parameters
             if padding[-1] not in {0, 1} or padding[-2] not in {0, 1}:
                 raise NotImplementedError("Only support padding[1]/padding[2] as 0 or 1")
-            if not (all(s == 1 for s in (stride if isinstance(stride, tuple) else (stride,))) and
-                    all(d == 1 for d in (dilation if isinstance(dilation, tuple) else (dilation,)))):
-                raise NotImplementedError("Only support stride=1 and dilation=1")
+            if not all(s == 1 for s in (stride[-2:] if isinstance(stride, tuple) else (stride,))):
+                raise NotImplementedError("Only support stride=1 for dim H, W")
+            if not all(d == 1 for d in (dilation if isinstance(dilation, tuple) else (dilation,))):
+                raise NotImplementedError("Only support dilation=1")
 
             # Validate kernel size and padding relationship [[3]][[6]]
             kernel_size = weight.shape[2:5]  # Get kernel dimensions (depth, height, width)
@@ -347,7 +350,7 @@ class Parallel_VAE_SP:
                 input = self.exchange_columns(input, pad=True)
                 
             # Call original convolution with adjusted padding
-            return self.ori_conv3d(input, weight, bias, stride=1, padding=(padding[0],0,0), 
+            return self.ori_conv3d(input, weight, bias, stride=stride, padding=(padding[0],0,0), 
                                    dilation=1, groups=groups)
         return wrapped_conv3d
 
@@ -364,44 +367,100 @@ class Parallel_VAE_SP:
         self.ori_conv2d = f_conv2d
         
         def wrapped_conv2d(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
-            # Process padding parameters
-            if isinstance(padding, int):
-                padding = (padding, padding)
-            else:
-                padding = tuple(padding)
-                if len(padding) != 2:
-                    raise ValueError("padding must be an int or a 2-element tuple")
-                    
-            # Validate parameters
-            if padding[-1] not in {0, 1} or padding[-2] not in {0, 1}:
-                raise NotImplementedError("Only support padding values as 0 or 1")
-            if not (all(s == 1 for s in (stride if isinstance(stride, tuple) else (stride,))) and
-                    all(d == 1 for d in (dilation if isinstance(dilation, tuple) else (dilation,)))):
-                raise NotImplementedError("Only support stride=1 and dilation=1")
 
-            # Validate kernel size and padding relationship [[8]]
-            kernel_size = weight.shape[2:4]  # Get kernel dimensions (height, width)
-            if padding[0] * 2 + 1 != kernel_size[0] or padding[1] * 2 + 1 != kernel_size[1]:
-                raise ValueError(
-                    f"2D Convolution requires: "
-                    f"padding[0]*2+1 == kernel_size[0] and padding[1]*2+1 == kernel_size[1]. "
-                    f"Got padding={padding}, kernel_size={kernel_size}"
+            # Handle stride parameter
+            if not isinstance(stride, tuple):
+                stride = (stride, stride)  # Convert to tuple if not already
+
+            if not all(s == 1 for s in stride):
+                # Dispatch input if any stride value is not 1
+                input = self.dispatch(input.unsqueeze(2)).squeeze(2)
+ 
+                # Dynamically calculate the split range
+                total_out_channels = weight.size(0)
+                base = total_out_channels // self.world_size
+                remainder = total_out_channels % self.world_size
+                
+                # Record the number of channels assigned to each device
+                channels_per_rank = [
+                    base + (1 if r < remainder else 0) for r in range(self.world_size)
+                ]
+                
+                # Current process channel range
+                start = sum(channels_per_rank[:self.rank])
+                end = start + channels_per_rank[self.rank]
+                
+                weight_chunk = weight.narrow(0, start, end - start)
+                bias_chunk = bias.narrow(0, start, end - start) if bias is not None else None
+                
+                # Call original convolution with adjusted parameters
+                output = self.ori_conv2d(
+                    input, weight_chunk, bias_chunk, stride, padding, dilation, groups)
+                
+                # On r-th NPU  output  [B, C/N_r, H, W] -> list of  [B, C/N_r, H/h_split _i , W/w_split _i] for i = 0  ~ world size-1
+                patches = self.patch(output, return_lst=True)
+                
+                # Construct the list of receiving shapes
+                # On i-th NPU [B,  C/N_r, H/h_split _i , W/w_split _i] , for r = 0  ~ world size-1
+                h_part, w_part = patches[self.rank].shape[-2:] 
+                recv_shapes = [
+                    (output.shape[0], channels_per_rank[r], h_part, w_part)
+                    for r in range(self.world_size)
+                ]
+                # Prepare buffers for all-to-all communication
+                gathered_outputs = [
+                    torch.empty(recv_shapes[r], dtype=output.dtype, device=output.device)
+                    for r in range(self.world_size)
+                ]
+                
+                # Perform all-to-all communication to exchange data across processes
+                dist.all_to_all(gathered_outputs, patches) 
+                
+                # Concatenate gathered outputs along the channel dimension
+                full_output = torch.cat(gathered_outputs, dim=1)  
+                
+                return full_output
+
+            else:
+
+                # Process padding parameters
+                if isinstance(padding, int):
+                    padding = (padding, padding)
+                else:
+                    padding = tuple(padding)
+                    if len(padding) != 2:
+                        raise ValueError("padding must be an int or a 2-element tuple")
+                        
+                # Validate parameters
+                if padding[-1] not in {0, 1} or padding[-2] not in {0, 1}:
+                    raise NotImplementedError("Only support padding values as 0 or 1")
+                if not (all(s == 1 for s in (stride if isinstance(stride, tuple) else (stride,))) and
+                        all(d == 1 for d in (dilation if isinstance(dilation, tuple) else (dilation,)))):
+                    raise NotImplementedError("Only support stride=1 and dilation=1")
+
+                # Validate kernel size and padding relationship [[8]]
+                kernel_size = weight.shape[2:4]  # Get kernel dimensions (height, width)
+                if padding[0] * 2 + 1 != kernel_size[0] or padding[1] * 2 + 1 != kernel_size[1]:
+                    raise ValueError(
+                        f"2D Convolution requires: "
+                        f"padding[0]*2+1 == kernel_size[0] and padding[1]*2+1 == kernel_size[1]. "
+                        f"Got padding={padding}, kernel_size={kernel_size}"
+                    )
+                    
+                # Handle row and column exchanges for padding
+                if padding[-2] == 1:
+                    input = self.exchange_rows(input, pad=True)
+                if padding[-1] == 1:
+                    input = self.exchange_columns(input, pad=True)
+                    
+                # Call original convolution with adjusted padding
+                return self.ori_conv2d(
+                    input, weight, bias,
+                    stride=1,
+                    padding=0,
+                    dilation=1,
+                    groups=groups
                 )
-                
-            # Handle row and column exchanges for padding
-            if padding[-2] == 1:
-                input = self.exchange_rows(input, pad=True)
-            if padding[-1] == 1:
-                input = self.exchange_columns(input, pad=True)
-                
-            # Call original convolution with adjusted padding
-            return self.ori_conv2d(
-                input, weight, bias,
-                stride=1,
-                padding=0,
-                dilation=1,
-                groups=groups
-            )
         return wrapped_conv2d
 
     def wraps_f_interpolate(self, f_interpolate=F.interpolate):
@@ -536,6 +595,51 @@ class Parallel_VAE_SP:
             return self.dispatch(output)
         return wrapped_decoder_fw
 
+    def wraps_f_pad(self, f_pad=F.pad):
+        self.ori_pad = f_pad
+        def wrapped_pad(input, pad, mode='constant', value=None):
+            len_pad = len(pad)
+            if len_pad % 2 != 0:
+                raise ValueError("Padding length must be even-valued")
+            adapted_pad = list(pad)
+            if len_pad >1:
+                # Handle horizontal direction (left/right)
+                if self.w_split == 1:
+                    # Apply full left/right padding when single slice
+                    adapted_pad[0] = pad[0]
+                    adapted_pad[1] = pad[1]
+                else:
+                    # Apply pad[0], pad[1] to the left and right boundary 
+                    if self.col_rank == 0:
+                        adapted_pad[0] = pad[0] 
+                        adapted_pad[1] = 0
+                    elif self.col_rank == self.w_split - 1:
+                        adapted_pad[0] = 0
+                        adapted_pad[1] = pad[1] 
+                    else:
+                        adapted_pad[0] = 0
+                        adapted_pad[1] = 0
+            if len_pad > 3:
+                # Handle vertical direction (top/bottom)
+                if self.h_split == 1:
+                    # Apply full top/bottom padding when single slice 
+                    adapted_pad[2] = pad[2]
+                    adapted_pad[3] = pad[3]
+                else:
+                    # Apply pad[2], pad[3] to the top and bottom boundary 
+                    if self.row_rank == 0:
+                        adapted_pad[2] = pad[2] 
+                        adapted_pad[3] = 0
+                    elif self.row_rank == self.h_split - 1:
+                        adapted_pad[2] = 0
+                        adapted_pad[3] = pad[3] 
+                    else:
+                        adapted_pad[2] = 0
+                        adapted_pad[3] = 0
+
+            return self.ori_pad(input, tuple(adapted_pad), mode=mode, value=value)
+        return wrapped_pad
+
 VAE_PATCH_PARALLEL = None
 FA_LAYOUT = None
 
@@ -578,6 +682,8 @@ class VAE_patch_parallel:
         F.conv3d = self.vae_pp_cls.wraps_f_conv3d(F.conv3d)
         F.conv2d = self.vae_pp_cls.wraps_f_conv2d(F.conv2d)
         F.interpolate = self.vae_pp_cls.wraps_f_interpolate(F.interpolate)
+        F.pad = self.vae_pp_cls.wraps_f_pad(F.pad)
+
     def _sub_FA(self):
         global FA_LAYOUT
         F.scaled_dot_product_attention = self.vae_pp_cls.wraps_fa(
@@ -591,6 +697,9 @@ class VAE_patch_parallel:
             F.conv2d = self.vae_pp_cls.ori_conv2d
         if self.vae_pp_cls.ori_interpolate is not None:
             F.interpolate = self.vae_pp_cls.ori_interpolate
+        if self.vae_pp_cls.ori_pad is not None:
+            F.pad = self.vae_pp_cls.ori_pad
+
     def _revert_FA(self):
         """Restore original attention function after context exit"""
         if self.vae_pp_cls.ori_fa is not None:

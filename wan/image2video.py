@@ -99,7 +99,7 @@ class WanI2V:
             dtype=self.param_dtype)
         if use_vae_parallel:
             set_vae_patch_parallel(self.vae.model, 4, dist.get_world_size() // 4, decoder_decode="decoder.forward")
-
+            set_vae_patch_parallel(self.vae.model, 4, dist.get_world_size() // 4, decoder_decode="encoder.forward")
         self.clip = CLIPModel(
             dtype=config.clip_dtype,
             device=self.device,
@@ -244,16 +244,28 @@ class WanI2V:
         clip_context = self.clip.visual([img[:, None, :, :]])
         if offload_model:
             self.clip.model.cpu()
+        # NOTE 下面是源代码interpolate 在cpu 计算,下面移动到NPU上计算,有细微差异
+        '''
+        encode_input = torch.concat([
+                    torch.nn.functional.interpolate(
+                        img[None].cpu(), size=(h, w), mode='bicubic').transpose(
+                            0, 1),
+                    torch.zeros(3, F - 1, h, w)
+                ],
+            dim=1).to(self.device)
+        '''
+        # 这里在是NPU 上计算会快一些
+        encode_input = torch.concat([
+                    torch.nn.functional.interpolate(
+                        img[None].to(self.device), size=(h, w), mode='bicubic').transpose(
+                            0, 1),
+                        torch.zeros(3, F - 1, h, w, device = self.device)],
+                     dim=1)
+        with VAE_patch_parallel():
+            y = self.vae.encode([
+                encode_input
+            ])[0]
 
-        y = self.vae.encode([
-            torch.concat([
-                torch.nn.functional.interpolate(
-                    img[None].cpu(), size=(h, w), mode='bicubic').transpose(
-                        0, 1),
-                torch.zeros(3, F - 1, h, w)
-            ],
-                         dim=1).to(self.device)
-        ])[0]
         y = torch.concat([msk, y])
 
         @contextmanager
