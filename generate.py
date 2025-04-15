@@ -532,3 +532,4 @@ if __name__ == "__main__":
     args = _parse_args()
     generate(args)
     finalize_parallel_env()
+    
