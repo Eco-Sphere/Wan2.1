@@ -32,6 +32,11 @@ class Parallel_VAE_SP:
         # Calculate grid coordinates
         self.row_rank = self.rank // w_split  # Row index (0 to w_split-1) [[6]]
         self.col_rank = self.rank % w_split   # Column index (0 to h_split-1) [[6]]
+
+        if self.rank in range(8):
+            self.group_all = torch.distributed.new_group(ranks=[0,1,2,3,4,5,6,7])
+        else :
+            self.group_all = torch.distributed.new_group(ranks=[8,9,10,11,12,13,14,15])
         
         # Create communication groups
         self._create_group_by_row()
@@ -136,7 +141,7 @@ class Parallel_VAE_SP:
                                    device=local_patch.device, dtype=torch.int32)
         shape_list = [torch.empty(2, dtype=torch.int32, 
                      device=local_patch.device) for _ in range(self.world_size)]
-        dist.all_gather(shape_list, local_shape)
+        dist.all_gather(shape_list, local_shape, group=self.group_all)
         
         all_shapes = [tuple(shape.tolist()) for shape in shape_list]
         
@@ -172,7 +177,7 @@ class Parallel_VAE_SP:
         ]
 
         # Second all-gather to collect partition data
-        dist.all_gather(gathered_data, local_patch.clone())
+        dist.all_gather(gathered_data, local_patch.clone(), group=self.group_all)
 
         # Reconstruct full tensor
         full_tensor = torch.empty(
@@ -414,7 +419,7 @@ class Parallel_VAE_SP:
                 ]
                 
                 # Perform all-to-all communication to exchange data across processes
-                dist.all_to_all(gathered_outputs, patches) 
+                dist.all_to_all(gathered_outputs, patches, group=self.group_all) 
                 
                 # Concatenate gathered outputs along the channel dimension
                 full_output = torch.cat(gathered_outputs, dim=1)  
@@ -565,7 +570,7 @@ class Parallel_VAE_SP:
             # Gather key shapes across processes
             local_shape = torch.tensor(k.shape, device=k.device)
             all_shapes = [torch.empty_like(local_shape) for _ in range(self.world_size)]
-            dist.all_gather(all_shapes, local_shape)
+            dist.all_gather(all_shapes, local_shape, group=self.group_all)
             all_shapes = [tuple(shape.tolist()) for shape in all_shapes]
             
             # Prepare buffers for full keys/values
@@ -573,8 +578,8 @@ class Parallel_VAE_SP:
             gathered_v = [torch.empty_like(k_tensor) for k_tensor in gathered_k]
             
             # Gather full keys and values
-            dist.all_gather(gathered_k, k.contiguous())
-            dist.all_gather(gathered_v, v.contiguous())
+            dist.all_gather(gathered_k, k.contiguous(), group=self.group_all)
+            dist.all_gather(gathered_v, v.contiguous(), group=self.group_all)
             
             # Concatenate along sequence dimension
             if layout == "BNSD":
