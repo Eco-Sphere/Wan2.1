@@ -21,7 +21,7 @@ import wan
 from wan.configs import WAN_CONFIGS, SIZE_CONFIGS, MAX_AREA_CONFIGS, SUPPORTED_SIZES
 from wan.utils.prompt_extend import DashScopePromptExpander, QwenPromptExpander
 from wan.utils.utils import cache_video, cache_image, str2bool
-from wan.distributed.parallel_mgr import ParallelConfig, init_parallel_env
+from wan.distributed.parallel_mgr import ParallelConfig, init_parallel_env, finalize_parallel_env
 
 from mindiesd import CacheConfig, CacheAgent
 
@@ -531,3 +531,4 @@ def generate(args):
 if __name__ == "__main__":
     args = _parse_args()
     generate(args)
+    finalize_parallel_env()
