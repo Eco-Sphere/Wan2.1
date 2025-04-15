@@ -273,13 +273,14 @@ class WanI2V:
                 dist.send(y, dst=target_rank)
         else:
             source_rank = self.rank - 8
-            shape_tensor = torch.tensor((4, ), dtype=torch.int64, device=self.device)
+            shape_tensor = torch.zeros((4, ), dtype=torch.int64, device=self.device)
             dist.recv(shape_tensor, src=source_rank)
             shape = shape_tensor.tolist()
             y = torch.zeros(shape, dtype=torch.float32, device=self.device)
-            dist.recv(y, sec=source_rank)
+            dist.recv(y, src=source_rank)
 
-        dist.barrier()
+        # if dist.is_initialized():
+        #     dist.barrier()
 
         y = torch.concat([msk, y])
 
