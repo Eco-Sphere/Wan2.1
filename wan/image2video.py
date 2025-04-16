@@ -270,11 +270,13 @@ class WanI2V:
                 for i in range(dist.get_world_size() // 8 - 1):
                     target_rank = self.rank + 8 * (i + 1)
                     torch.npu.synchronize()
+                    dist.barrier()
                     dist.send(shape_tensor, dst=target_rank)
                     dist.send(y, dst=target_rank)
         else:
             source_rank = self.rank % 8
             shape_tensor = torch.zeros((4, ), dtype=torch.int64, device=self.device)
+            dist.barrier()
             dist.recv(shape_tensor, src=source_rank)
             shape = shape_tensor.tolist()
             y = torch.zeros(shape, dtype=torch.float32, device=self.device)
