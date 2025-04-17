@@ -97,8 +97,10 @@ class WanI2V:
             device=self.device,
             dtype=self.param_dtype)
         if use_vae_parallel:
-            set_vae_patch_parallel(self.vae.model, 4, 8 // 4, world_size=8, decoder_decode="decoder.forward")
-            set_vae_patch_parallel(self.vae.model, 4, 8 // 4, world_size=8, decoder_decode="encoder.forward")
+            all_pp_group_ranks = [list(range(0,8)), list(range(8,16))]
+            set_vae_patch_parallel(self.vae.model, 4, 2, all_pp_group_ranks= all_pp_group_ranks, decoder_decode="decoder.forward")
+            set_vae_patch_parallel(self.vae.model, 4, 2, all_pp_group_ranks= all_pp_group_ranks, decoder_decode="encoder.forward")
+
         self.clip = CLIPModel(
             dtype=config.clip_dtype,
             device=self.device,
@@ -260,30 +262,11 @@ class WanI2V:
                             0, 1),
                         torch.zeros(3, F - 1, h, w, device = self.device)],
                      dim=1)
-        if self.rank < 8:
-            with VAE_patch_parallel():
-                y = self.vae.encode([
-                    encode_input
-                ])[0]
-            if dist.get_world_size() > 8:
-                shape_tensor = torch.tensor(y.shape, dtype=torch.int64, device=self.device)
-                for i in range(dist.get_world_size() // 8 - 1):
-                    target_rank = self.rank + 8 * (i + 1)
-                    torch.npu.synchronize()
-                    dist.barrier()
-                    dist.send(shape_tensor, dst=target_rank)
-                    dist.send(y, dst=target_rank)
-        else:
-            source_rank = self.rank % 8
-            shape_tensor = torch.zeros((4, ), dtype=torch.int64, device=self.device)
-            dist.barrier()
-            dist.recv(shape_tensor, src=source_rank)
-            shape = shape_tensor.tolist()
-            y = torch.zeros(shape, dtype=torch.float32, device=self.device)
-            dist.recv(y, src=source_rank)
-
-        # if dist.is_initialized():
-        #     dist.barrier()
+        
+        with VAE_patch_parallel():
+            y = self.vae.encode([
+                encode_input
+            ])[0]
 
         y = torch.concat([msk, y])
 
@@ -391,9 +374,8 @@ class WanI2V:
             if offload_model:
                 self.model.cpu()
                 torch.cuda.empty_cache()
-            if self.rank < 8:
-                with VAE_patch_parallel():
-                    videos = self.vae.decode(x0)
+            with VAE_patch_parallel():
+                videos = self.vae.decode(x0)
 
         del noise, latent
         del sample_scheduler

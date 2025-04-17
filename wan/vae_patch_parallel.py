@@ -7,7 +7,7 @@ from functools import reduce
 import functools
 
 class Parallel_VAE_SP:
-    def __init__(self, h_split=1, w_split=1, world_size=None):
+    def __init__(self, h_split=1, w_split=1, all_pp_group_ranks=None, **kwargs):
         """
         Initialize distributed parallel processing parameters
         
@@ -16,65 +16,85 @@ class Parallel_VAE_SP:
             w_split (int): Number of splits along width dimension
             world_size (int): Total number of processes (default: current world size)
         """
-        if world_size is None:
-            world_size = dist.get_world_size()  # Get total process count [[1]][[6]]
+        if all_pp_group_ranks is None:
+            all_pp_group_ranks = [list(range(0, dist.get_world_size()))]
+        all_pp_group_size = [ len(pp_group_ranks) for pp_group_ranks in all_pp_group_ranks]
+        for s in all_pp_group_size:
+            assert s == all_pp_group_size[0], ( f" every group size should be same")
+             
+        world_size = all_pp_group_size[0]  # Get total process count [[1]][[6]]
             
         # Validate world_size matches grid dimensions
         assert w_split * h_split == world_size, (
             f"world_size must be {w_split} * {h_split} = {w_split*h_split}, but got {world_size}"
         )
-        
-        self.rank = dist.get_rank()  # Current process rank [[6]]
-        self.world_size = world_size
+
+        self._creat_pp_group(all_pp_group_ranks)
+        # self.rank is the rank in current_pp_group
+        self.rank = dist.get_rank(self.current_pp_group)  # Current process rank [[6]]
+        self.world_size = dist.get_world_size(self.current_pp_group)
         self.w_split = w_split
         self.h_split = h_split
         
         # Calculate grid coordinates
         self.row_rank = self.rank // w_split  # Row index (0 to w_split-1) [[6]]
         self.col_rank = self.rank % w_split   # Column index (0 to h_split-1) [[6]]
-
-        if self.rank in range(8):
-            self.group_all = torch.distributed.new_group(ranks=[0,1,2,3,4,5,6,7])
-        else :
-            self.group_all = torch.distributed.new_group(ranks=[8,9,10,11,12,13,14,15])
         
         # Create communication groups
-        self._create_group_by_row()
-        self._create_group_by_col()
+        self._create_group_by_row(h_split, w_split, all_pp_group_ranks)
+        self._create_group_by_col(h_split, w_split, all_pp_group_ranks)
         self._row_col_to_global_rank()
         
         self.ori_conv3d = None
 
-    def _create_group_by_row(self):
-        """Create process groups for row-wise communication"""
-        for r in range(self.h_split):
-            ranks_in_row = []
-            for c in range(self.w_split):
-                global_rank = r * self.w_split + c
-                ranks_in_row.append(global_rank)
-                row_group = dist.new_group(ranks=ranks_in_row)
-                if r == self.row_rank:
-                    self.row_group = row_group
+    # world a list of list
+    def _creat_pp_group(self, all_pp_group_ranks=None):
+        for pp_group_ranks in all_pp_group_ranks:
+            group = dist.new_group(ranks=pp_group_ranks)
+            if dist.get_rank() in pp_group_ranks:
+                self.current_pp_group = group
+                # current_pp_group_ranks is  the global rank of the current_pp_group
+                # the reason of need it , is irend irecv need global rank
+                self.current_pp_group_ranks = pp_group_ranks
 
-    def _create_group_by_col(self):
+
+    def _create_group_by_row(self, h_split, w_split, all_pp_group_ranks):
+        """Create process groups for row-wise communication"""
+        for pp_group_ranks in all_pp_group_ranks:
+            for r in range(h_split):
+                ranks_in_row = []
+                for c in range(w_split):
+                    global_rank = pp_group_ranks[r * w_split + c]
+                    ranks_in_row.append(global_rank)
+                    row_group = dist.new_group(ranks=ranks_in_row)
+                    if r == self.row_rank and dist.get_rank() in pp_group_ranks:
+                        self.row_group = row_group
+
+    def _create_group_by_col(self, h_split, w_split, all_pp_group_ranks):
         """Create process groups for column-wise communication"""
-        for c in range(self.w_split):
-            ranks_in_col = []
-            for r in range(self.h_split):
-                global_rank = r * self.w_split + c
-                ranks_in_col.append(global_rank)
-                col_group = dist.new_group(ranks=ranks_in_col)
-                if c == self.col_rank:
-                    self.col_group = col_group
+        for pp_group_ranks in all_pp_group_ranks:
+            for c in range(self.w_split):
+                ranks_in_col = []
+                for r in range(self.h_split):
+                    global_rank = pp_group_ranks[r * self.w_split + c]
+                    ranks_in_col.append(global_rank)
+                    col_group = dist.new_group(ranks=ranks_in_col)
+                    if c == self.col_rank and dist.get_rank() in pp_group_ranks:
+                        self.col_group = col_group
+
 
     def _row_col_to_global_rank(self):
         # Create rank mappings for communication
         self.row_to_global_rank = {
-            r: r * self.w_split + self.col_rank 
+            r: self.current_pp_group_ranks[
+                r * self.w_split + self.col_rank
+                ] 
             for r in range(self.h_split)
         }
         self.col_to_global_rank = {
-            c: self.row_rank * self.w_split + c 
+            c: self.current_pp_group_ranks[
+                self.row_rank * self.w_split + c 
+                ]
             for c in range(self.w_split)
         }
 
@@ -141,7 +161,7 @@ class Parallel_VAE_SP:
                                    device=local_patch.device, dtype=torch.int32)
         shape_list = [torch.empty(2, dtype=torch.int32, 
                      device=local_patch.device) for _ in range(self.world_size)]
-        dist.all_gather(shape_list, local_shape, group=self.group_all)
+        dist.all_gather(shape_list, local_shape, group=self.current_pp_group)
         
         all_shapes = [tuple(shape.tolist()) for shape in shape_list]
         
@@ -168,16 +188,20 @@ class Parallel_VAE_SP:
         # TODO dispatch should be release to process the [B C W H]
         # Prepare buffers for data gathering
         batch_size, channels, time_steps = local_patch.shape[:3]
+
         gathered_data = [
             torch.empty(
-                (batch_size, channels, time_steps, h_part, w_part),
+                (batch_size * channels * time_steps * h_part * w_part,),
                 device=local_patch.device,
                 dtype=local_patch.dtype
             ) for h_part, w_part in all_shapes
         ]
+        # 执行 all_gather，确保所有进程发送相同长度的一维数据（需保证 local_patch 展平后长度与 element_counts 一致）
+        dist.all_gather(gathered_data, local_patch.view(-1).clone(), group=self.current_pp_group)
 
-        # Second all-gather to collect partition data
-        dist.all_gather(gathered_data, local_patch.clone(), group=self.group_all)
+        # 将一维数据重新调整为目标形状
+        for i, (h_part, w_part) in enumerate(all_shapes):
+            gathered_data[i] = gathered_data[i].view(batch_size, channels, time_steps, h_part, w_part)
 
         # Reconstruct full tensor
         full_tensor = torch.empty(
@@ -419,7 +443,7 @@ class Parallel_VAE_SP:
                 ]
                 
                 # Perform all-to-all communication to exchange data across processes
-                dist.all_to_all(gathered_outputs, patches, group=self.group_all) 
+                dist.all_to_all(gathered_outputs, patches, group=self.current_pp_group) 
                 
                 # Concatenate gathered outputs along the channel dimension
                 full_output = torch.cat(gathered_outputs, dim=1)  
@@ -570,7 +594,7 @@ class Parallel_VAE_SP:
             # Gather key shapes across processes
             local_shape = torch.tensor(k.shape, device=k.device)
             all_shapes = [torch.empty_like(local_shape) for _ in range(self.world_size)]
-            dist.all_gather(all_shapes, local_shape, group=self.group_all)
+            dist.all_gather(all_shapes, local_shape, group=self.current_pp_group)
             all_shapes = [tuple(shape.tolist()) for shape in all_shapes]
             
             # Prepare buffers for full keys/values
@@ -578,8 +602,8 @@ class Parallel_VAE_SP:
             gathered_v = [torch.empty_like(k_tensor) for k_tensor in gathered_k]
             
             # Gather full keys and values
-            dist.all_gather(gathered_k, k.contiguous(), group=self.group_all)
-            dist.all_gather(gathered_v, v.contiguous(), group=self.group_all)
+            dist.all_gather(gathered_k, k.contiguous(), group=self.current_pp_group)
+            dist.all_gather(gathered_v, v.contiguous(), group=self.current_pp_group)
             
             # Concatenate along sequence dimension
             if layout == "BNSD":
@@ -648,10 +672,12 @@ class Parallel_VAE_SP:
 VAE_PATCH_PARALLEL = None
 FA_LAYOUT = None
 
-def set_vae_patch_parallel(vae,h_split=1, w_split=1, world_size=None, fa_layout="BNSD",decoder_decode="decoder.forward"):
+def set_vae_patch_parallel(vae,h_split=1, w_split=1, fa_layout="BNSD",decoder_decode="decoder.forward", 
+                            all_pp_group_ranks=None, **kwargs):
     global VAE_PATCH_PARALLEL
     global FA_LAYOUT
-    VAE_PATCH_PARALLEL = Parallel_VAE_SP(h_split, w_split, world_size)
+    if VAE_PATCH_PARALLEL is None:
+        VAE_PATCH_PARALLEL = Parallel_VAE_SP(h_split, w_split, all_pp_group_ranks)
     FA_LAYOUT = fa_layout
 
     # wraps_decoder_fw
