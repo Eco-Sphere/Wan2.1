@@ -521,7 +521,7 @@ def generate(args):
             cache_video(
                 tensor=video[None],
                 save_file=args.save_file,
-                fps= 12 if args.frame_num == 61 else cfg.sample_fps,
+                fps= args.frame_num // 5,
                 nrow=1,
                 normalize=True,
                 value_range=(-1, 1))

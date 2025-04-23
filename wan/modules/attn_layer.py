@@ -121,13 +121,14 @@ class xFuserLongContextAttention(LongContextAttention):
         key_layer = all_to_all_4D(input_=key, scatter_idx=2, gather_idx=1, group=self.ulysses_pg)
         value_layer = all_to_all_4D(input_=value, scatter_idx=2, gather_idx=1, group=self.ulysses_pg)
 
-        if get_sp_group().ring_world_size == 2:
+        if get_sp_group().ring_world_size > 1:
+            ring_size = get_sp_group().ring_world_size
             b, s, n, d = key_layer.shape
-            k_full = torch.empty([2, b, s, n, d], dtype=query_layer.dtype, device=query_layer.device)
+            k_full = torch.empty([ring_size, b, s, n, d], dtype=query_layer.dtype, device=query_layer.device)
             dist.all_gather_into_tensor(k_full, key_layer, group=self.ring_pg)
             key_layer = k_full.permute(1, 0, 2, 3, 4).reshape(b, -1, n, d)
 
-            v_full = torch.empty([2, b, s, n, d], dtype=query_layer.dtype, device=query_layer.device)
+            v_full = torch.empty([ring_size, b, s, n, d], dtype=query_layer.dtype, device=query_layer.device)
             dist.all_gather_into_tensor(v_full, value_layer, group=self.ring_pg)
             value_layer = v_full.permute(1, 0, 2, 3, 4).reshape(b, -1, n, d)
 
