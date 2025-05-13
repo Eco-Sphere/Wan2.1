@@ -220,7 +220,7 @@ def add_attentioncache_args(parser: argparse.ArgumentParser):
     group.add_argument("--attentioncache_ratio", type=float, default=1.2)
     group.add_argument("--attentioncache_interval", type=int, default=4)
     group.add_argument("--start_step", type=int, default=12)
-    group.add_argument("--end_step", type=int, default=27)
+    group.add_argument("--end_step", type=int, default=37)
 
     return parser
 

@@ -50,7 +50,7 @@ class LayerNorm(nn.LayerNorm):
     def forward(self, x):
         # return super().forward(x.float()).type_as(x)
         return torch_npu.npu_layer_norm_eval(
-            x, normalized_shape=[self.normalized_shape], weight=self.weight, bias=self.bias, eps=self.eps,
+            x, normalized_shape=[self.normalized_shape[0]], weight=self.weight, bias=self.bias, eps=self.eps,
         )
 
 
