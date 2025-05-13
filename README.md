@@ -268,6 +268,8 @@ torchrun --nproc_per_node=8 generate.py \
 --ckpt_dir ${model_base} \
 --frame_num 81 \
 --sample_steps 40 \
+--dit_fsdp \
+--t5_fsdp \
 --cfg_size 1 \
 --ulysses_size 8 \
 --image examples/i2v_input.JPG \
