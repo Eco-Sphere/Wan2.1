@@ -516,6 +516,8 @@ class WanModel(ModelMixin, ConfigMixin):
         # initialize weights
         self.init_weights()
 
+        self.freqs_list = None
+
     def forward(
         self,
         x,

@@ -111,29 +111,31 @@ def usp_dit_forward(
         x, get_sequence_parallel_world_size(),
         dim=1)[get_sequence_parallel_rank()]
 
-    c = (self.dim // self.num_heads) // 2
-    s = x.shape[1]
-    freqs = self.freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
-    freqs_list=[]
+    if self.freqs_list is None:
+        c = (self.dim // self.num_heads) // 2
+        s = x.shape[1]
+        freqs = self.freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
+        freqs_list=[]
 
-    for i, (f, h, w) in enumerate(grid_sizes.tolist()):
-        seq_len = f * h * w
+        for i, (f, h, w) in enumerate(grid_sizes.tolist()):
+            seq_len = f * h * w
 
-        freqs_i = torch.cat([
-            freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
-            freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
-            freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1)
-        ],
-                            dim=-1).reshape(seq_len, 1, -1)
+            freqs_i = torch.cat([
+                freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
+                freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
+                freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1)
+            ],
+                                dim=-1).reshape(seq_len, 1, -1)
 
-        # apply rotary embedding
-        sp_size = get_sequence_parallel_world_size()
-        sp_rank = get_sequence_parallel_rank()
-        freqs_i = pad_freqs(freqs_i, s * sp_size)
-        s_per_rank = s
-        freqs_i_rank = freqs_i[(sp_rank * s_per_rank):((sp_rank + 1) *
-                                                       s_per_rank), :, :]
-        freqs_list.append(freqs_i_rank)
+            # apply rotary embedding
+            sp_size = get_sequence_parallel_world_size()
+            sp_rank = get_sequence_parallel_rank()
+            freqs_i = pad_freqs(freqs_i, s * sp_size)
+            s_per_rank = s
+            freqs_i_rank = freqs_i[(sp_rank * s_per_rank):((sp_rank + 1) *
+                                                        s_per_rank), :, :]
+            freqs_list.append(freqs_i_rank)
+        self.freqs_list = freqs_list
 
     # arguments
     kwargs = dict(
