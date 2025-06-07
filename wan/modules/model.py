@@ -595,8 +595,8 @@ class WanModel(ModelMixin, ConfigMixin):
                                     dim=-1).reshape(seq_len, 1, -1)
 
                 cos, sin = torch.chunk(torch.view_as_real(freqs_i.to(torch.complex64)), 2, dim=-1)
-                cos = cos.unsqueeze(0).expend(-1, -1, -1, -1, 2).flatten(-2)
-                sin = sin.unsqueeze(0).expend(-1, -1, -1, -1, 2).flatten(-2)
+                cos = cos.unsqueeze(0).expand(-1, -1, -1, -1, 2).flatten(-2)
+                sin = sin.unsqueeze(0).expand(-1, -1, -1, -1, 2).flatten(-2)
                 freqs_i = (cos, sin)
                 freqs_list.append(freqs_i)
             self.freqs_list = freqs_list
