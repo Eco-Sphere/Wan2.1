@@ -94,40 +94,114 @@ cd Wan2.1
 model_base="./Wan2.1-T2V-1.3B/"
 ```
 #### 3.2.1 单卡性能测试
+##### 3.2.1.1 等价优化
 执行命令：
 ```shell
 # Wan2.1-T2V-1.3B
+export ALGO=0
+export PYTORCH_NPU_ALLOC_CONF='expandable_segments:True'
+export TASK_QUEUE_ENABLE=2
+export CPU_AFFINITY_CONF=1
+export TOKENIZERS_PARALLELISM=false
+
 python generate.py  \
 --task t2v-1.3B \
 --size 832*480 \
 --ckpt_dir ${model_base} \
---prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
+--sample_steps 50 \
+--prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."\
+--base_seed 0 
 ```
 参数说明：
+- ALGO: 为0表示默认FA算子；设置为1表示使用高性能FA算子
 - task: 任务类型。
 - ckpt_dir: 模型的权重路径
 - size: 生成视频的高和宽
 - prompt: 文本提示词
+- base_seed: 随机种子
 
-#### 3.2.2 多卡性能测试
+##### 3.2.2.1 算法优化
 执行命令：
 ```shell
-# 1.3B支持单卡、双卡、四卡
+# Wan2.1-T2V-1.3B
+export ALGO=0
+export PYTORCH_NPU_ALLOC_CONF='expandable_segments:True'
+export TASK_QUEUE_ENABLE=2
+export CPU_AFFINITY_CONF=1
+export TOKENIZERS_PARALLELISM=false
+
+python generate.py  \
+--task t2v-1.3B \
+--size 832*480 \
+--ckpt_dir ${model_base} \
+--sample_steps 50 \
+--prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."\
+--base_seed 0 \
+--use_attentioncache \
+--start_step 20 \
+--attentioncache_interval 2 \
+--end_step 47
+```
+参数说明：
+- use_attentioncache: 使能attentioncache策略
+- start_step: cache开始的step
+- attentioncache_interval: 连续cache数
+- end_step: cache结束的step
+
+#### 3.2.2 多卡性能测试
+##### 3.2.2.1 等价优化
+执行命令：
+```shell
+# 1.3B支持双卡、四卡
+export ALGO=0
+export PYTORCH_NPU_ALLOC_CONF='expandable_segments:True'
+export TASK_QUEUE_ENABLE=2
+export CPU_AFFINITY_CONF=1
+export TOKENIZERS_PARALLELISM=false
+
 torchrun --nproc_per_node=4 generate.py \
 --task t2v-1.3B \
 --size 832*480 \
 --ckpt_dir ${model_base} \
---dit_fsdp \
---t5_fsdp \
 --ulysses_size 4 \
---vae_parallel \
---prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
+--prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage." \
+--base_seed 0 
 ```
+
 参数说明：
 - dit_fsdp: DiT使用FSDP
 - t5_fsdp: T5使用FSDP
 - ulysses_size: ulysses并行数
-- vae_parallel: 使能vae并行策略
+
+##### 3.2.2.2 算法优化
+执行命令：
+```shell
+# 1.3B支持双卡、四卡
+export ALGO=0
+export PYTORCH_NPU_ALLOC_CONF='expandable_segments:True'
+export TASK_QUEUE_ENABLE=2
+export CPU_AFFINITY_CONF=1
+export TOKENIZERS_PARALLELISM=false
+
+torchrun --nproc_per_node=4 generate.py \
+--task t2v-1.3B \
+--size 832*480 \
+--ckpt_dir ${model_base} \
+--ulysses_size 4 \
+--prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage." \
+--base_seed 0 \
+--use_attentioncache \
+--start_step 20 \
+--attentioncache_interval 2 \
+--end_step 47
+```
+
+参数说明：
+- use_attentioncache: 使能attentioncache策略
+- start_step: cache开始的step
+- attentioncache_interval: 连续cache数
+- end_step: cache结束的step
+
 
 ### 3.3 Wan2.1-T2V-14B
 使用上一步下载的权重
@@ -147,12 +221,14 @@ torchrun --nproc_per_node=8 generate.py \
 --t5_fsdp \
 --ulysses_size 8 \
 --vae_parallel \
---prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
+--prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage." \
+--base_seed 0 
 ```
 参数说明：
 - ALGO: 为0表示默认FA算子；设置为1表示使用高性能FA算子
 - ulysses_size: ulysses并行数
 - vae_parallel: 使能vae并行策略
+- base_seed: 随机种子
 
 #### 3.3.1.2 16卡性能测试
 执行命令：
@@ -167,7 +243,8 @@ torchrun --nproc_per_node=8 generate.py \
 --cfg_size 2 \
 --ulysses_size 8 \
 --vae_parallel \
---prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
+--prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage." \
+--base_seed 0
 ```
 参数说明：
 - ALGO: 为0表示默认FA算子；设置为1表示使用高性能FA算子
@@ -196,7 +273,7 @@ torchrun --nproc_per_node=8 generate.py \
 --prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage." \
 --use_attentioncache \
 --start_step 20 \
---attentioncache_interval 3 \
+--attentioncache_interval 2 \
 --end_step 47
 ```
 参数说明：
@@ -236,6 +313,7 @@ torchrun --nproc_per_node=8 generate.py \
 --ulysses_size 8 \
 --vae_parallel \
 --image examples/i2v_input.JPG \
+--base_seed 0 \
 --prompt "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's intricate details and the refreshing atmosphere of the seaside."
 ```
 参数说明：
@@ -251,7 +329,9 @@ torchrun --nproc_per_node=8 generate.py \
 - ulysses_size: ulysses并行数
 - vae_parallel: 使能vae并行策略
 - image: 用于生成视频的图片路径
+- base_seed: 随机种子
 - prompt: 文本提示词
+
 
 #### 3.4.2 算法优化
 执行命令：
@@ -274,6 +354,7 @@ torchrun --nproc_per_node=8 generate.py \
 --ulysses_size 8 \
 --image examples/i2v_input.JPG \
 --prompt "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's intricate details and the refreshing atmosphere of the seaside." \
+--base_seed 0 \
 --vae_parallel \
 --use_attentioncache \
 --start_step 12 \
