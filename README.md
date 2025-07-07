@@ -4,7 +4,7 @@
 
   | 配套  | 版本 | 环境准备指导 |
   | ----- | ----- |-----|
-  | Python | 3.10.2 | - |
+  | Python | 3.11.10 | - |
   | torch | 2.1.0 | - |
 
 ### 1.1 获取CANN&MindIE安装包&环境准备
@@ -84,7 +84,6 @@ https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-720P
 ### 3.1 下载到本地
 ```shell
 git clone https://modelers.cn/MindIE/Wan2.1.git
-cd Wan2.1
 ```
 
 ### 3.2 Wan2.1-T2V-1.3B
@@ -230,7 +229,27 @@ torchrun --nproc_per_node=8 generate.py \
 - vae_parallel: 使能vae并行策略
 - base_seed: 随机种子
 
-#### 3.3.1.2 16卡性能测试
+#### 3.3.1.2 8卡TP性能测试
+执行命令：
+```shell
+export ALGO=0
+torchrun --nproc_per_node=8 generate.py \
+--task t2v-14B \
+--size 1280*720 \
+--ckpt_dir ${model_base} \
+--t5_fsdp \
+--tp_size 8 \
+--vae_parallel \
+--prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage." \
+--base_seed 0 
+```
+参数说明：
+- ALGO: 为0表示默认FA算子；设置为1表示使用高性能FA算子
+- tp_size: tensor parallel并行数
+- vae_parallel: 使能vae并行策略
+- base_seed: 随机种子
+
+#### 3.3.1.3 16卡性能测试
 执行命令：
 ```shell
 export ALGO=0
@@ -332,6 +351,34 @@ torchrun --nproc_per_node=8 generate.py \
 - base_seed: 随机种子
 - prompt: 文本提示词
 
+#### 3.4.1.2 8卡TP性能测试
+
+执行命令：
+```shell
+export ALGO=0
+torchrun --nproc_per_node=8 generate.py \
+--task i2v-14B \
+--size 832*480 \
+--ckpt_dir ${model_base} \
+--frame_num 81 \
+--sample_steps 40 \
+--t5_fsdp \
+--tp_size 8 \
+--vae_parallel \
+--image examples/i2v_input.JPG \
+--base_seed 0 \
+--prompt "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's intricate details and the refreshing atmosphere of the seaside."
+```
+参数说明：
+- ALGO: 为0表示默认FA算子；设置为1表示使用高性能FA算子
+- ckpt_dir: 模型的权重路径
+- frame_num: 生成视频的帧数
+- sample_steps: 推理步数
+- t5_fsdp: T5使用FSDP
+- tp_size: tensor parallel并行数
+- vae_parallel: 使能vae并行策略
+- base_seed: 随机种子
+- prompt: 文本提示词
 
 #### 3.4.2 算法优化
 执行命令：
@@ -371,6 +418,7 @@ torchrun --nproc_per_node=8 generate.py \
 - attentioncache_interval: 连续cache数
 - end_step: cache结束的step
 
+注： 若出现OOM，请添加环境变量`export T5_LOAD_CPU=1`
 
 ## 声明
 - 本代码仓提到的数据集和模型仅作为示例，这些数据集和模型仅供您用于非商业目的，如您使用这些数据集和模型来完成示例，请您特别注意应遵守对应数据集和模型的License，如您因使用数据集或模型而产生侵权纠纷，华为不承担任何责任。

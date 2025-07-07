@@ -156,7 +156,7 @@ def attention(
         q = q.to(torch.bfloat16)
         k = k.to(torch.bfloat16)
         v = v.to(torch.bfloat16)
-        if q.shape[1] == k.shape[1] and int(os.getenv('ALGO', 0)) == 1:
+        if version is None and q.shape[1] == k.shape[1] and int(os.getenv('ALGO', 0)) == 1:
             out = attention_forward(q, k, v,
                                 opt_mode="manual", op_type="ascend_laser_attention", layout="BNSD")
         else:

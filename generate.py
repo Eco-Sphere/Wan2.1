@@ -461,7 +461,7 @@ def generate(args):
 
         transformer = wan_i2v.model
         if args.tp_size > 1:
-            logging.info("Initting tensor parallel...")
+            logging.info("Initializing tensor parallel...")
             applicator = TensorParallelApplicator(args.tp_size, device_map="cpu")
             applicator.apply_to_model(transformer)
         wan_i2v.model.to("npu")
