@@ -420,6 +420,118 @@ torchrun --nproc_per_node=8 generate.py \
 
 注： 若出现OOM，请添加环境变量`export T5_LOAD_CPU=1`
 
+## 四、量化功能支持
+本项目新增量化功能，支持权重 8 位（w8）与激活 8 位 / 16 位（a8/a16）的量化组合，可减少模型显存占用并保持推理性能
+### 4.1 安装量化工具msModelSlim
+参考[官方README](https://gitee.com/ascend/msit/tree/master/msmodelslim)
+1. git clone下载msit仓代码
+2. 进入到msit/msmodelslim的目录 cd msit/msmodelslim；并在进入的msmodelslim目录下，运行安装脚本 bash install.sh
+
+### 4.2 量化模型生成
+通过`quantization/quant.py`脚本生成量化模型及描述文件，需基于原始模型权重进行量化。
+
+##### 4.2.1 量化脚本参数说明
+| 参数名              | 说明                                                                 | 可选值/示例                     |
+|---------------------|----------------------------------------------------------------------|--------------------------------|
+| --task              | 任务类型（与推理任务一致）                                           | t2v-1.3B, t2v-14B, i2v-14B    |
+| --ckpt_dir          | 原始模型权重路径                                                     | ./Wan2.1-T2V-1.3B              |
+| --quant_save_dir    | 量化模型保存路径（默认./quant_weights）                              | ./my_quant_weights             |
+| --quant_mode        | 量化模式（权重+激活位宽）                                            | w8a8（8bit权重+8bit激活）、w8a16（8bit权重+16bit激活） |
+| --is_dynamic        | 是否启用动态量化（激活参数动态计算）                                 | （默认False，加此参数表示启用） |
+| --w_sym             | 是否对权重使用对称量化                                               | （默认False，加此参数表示启用） |
+| --act_method        | 激活量化方法（1=min-max，2=histogram，3=auto-mixed，推荐3）          | 1/2/3（默认3）                 |
+| --disable_quant_layers | 需跳过量化的层名称列表（可选）                                       | "block.0" "block.1"            |
+| --device_id         | 量化使用的NPU设备ID（默认0）                                         | 0, 1                           |
+
+##### 4.2.2 量化脚本运行示例
+以T2V-14B模型为例，生成8bit权重+8bit激活的动态量化模型：
+```shell
+# 环境变量与推理保持一致
+export ALGO=0
+export PYTORCH_NPU_ALLOC_CONF='expandable_segments:True'
+export TOKENIZERS_PARALLELISM=false
+
+model_base="Wan2.1-T2V-14B/"
+python quantization/quant.py \
+--task t2v-14B \
+--ckpt_dir ${model_path} \
+--quant_mode w8a8 \
+--is_dynamic \
+--w_sym \
+--act_method 3 \
+--quant_save_dir ./quant_w8a8_dynamic \
+--device_id 0
+```
+执行后，`quant_w8a8_dynamic`目录下会生成两个文件：
+- `quant_model_description_w8a8_dynamic.json`：量化配置描述文件（包含量化位宽、层映射等元信息）
+- `quant_model_weight_w8a8_dynamic.safetensors`：量化后的权重文件（采用safe tensor格式，兼容Hugging Face生态）
+
+### 4.3 安装量化模型推理工具NNAL神经网络加速库和torch_atb
+#### 4.3.1 获取安装包
+- 支持设备：[Atlas 800I A2](https://www.hiascend.com/developer/download/community/result?module=pt+ie+cann&product=4&model=32)
+- [环境准备指导](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/81RC1alpha001/softwareinst/instg/instg_0003.html)
+
+#### 4.3.2 安装
+```shell
+# 增加软件包可执行权限，{version}表示软件版本号，{arch}表示CPU架构。
+chmod +x Ascend-cann-nnal_<version>_linux-<arch>.run
+# 默认路径安装:
+./Ascend-cann-nnal_<version>_linux-<arch>.run --install --torch_atb
+# 配置环境变量:
+source ${HOME}/Ascend/nnal/atb/set_env.sh
+```
+
+### 4.4 使用量化模型推理
+使用量化模型进行推理时，需在原有generate.py命令中添加`--quant_desc_path`参数，指向量化描述文件（quant_model_description_*.json）路径，该路径需要是绝对路径，其余参数与原生模型推理一致。
+#### 4.4.1 单卡量化推理示例（T2V-1.3B）
+```shell
+export ALGO=0
+export PYTORCH_NPU_ALLOC_CONF='expandable_segments:True'
+export TOKENIZERS_PARALLELISM=false
+export ASCEND_RT_VISIBLE_DEVICES=0 #指定0卡
+export model_path="your local Wan2.1-T2V-1.3B model path"
+export file_absolute_path="your local quant description file absolute path"
+
+python generate.py  \
+  --task t2v-1.3B \
+  --size 832*480 \
+  --ckpt_dir ${model_path} \
+  --sample_steps 50 \
+  --prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage." \
+  --base_seed 0 \
+  --quant_desc_path ${file_absolute_path}
+```
+
+#### 4.4.2 多卡量化推理示例（T2V-14B 8 卡）
+```shell
+export ALGO=0
+export PYTORCH_NPU_ALLOC_CONF='expandable_segments:True'
+export TASK_QUEUE_ENABLE=2
+export CPU_AFFINITY_CONF=1
+export TOKENIZERS_PARALLELISM=false
+export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export model_path="your local Wan2.1-T2V-14B model path"
+export file_absolute_path="your local quant description file absolute path"
+
+torchrun --nproc_per_node=8 --master-port 29501 generate.py \
+    --task t2v-14B \
+    --ckpt_dir ${model_path} \
+    --size 1280*720 \
+    --sample_steps 50 \
+    --frame_num 81 \
+    --t5_fsdp \
+    --ulysses_size 8 \
+    --prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage." \
+    --base_seed 0 \
+    --quant_desc_path ${file_absolute_path}
+```
+
+#### 4.4.3 量化推理注意事项
+- 多卡兼容性：目前量化模型在多卡推理时不支持`--dit_fsdp`参数，请避免使用该参数，否则会导致加载量化模型权重失败。
+- 路径要求：`--quant_desc_path`需指向完整的量化描述文件路径（即quant_model_description_*.json），且该路径要求填写绝对路径。量化权重文件（.safetensors）需与描述文件在同一目录下，否则会提示权重加载失败。
+- 任务兼容性：量化功能支持所有任务类型（T2V-1.3B、T2V-14B、I2V-14B），使用方法与上述示例一致。
+
+
 ## 声明
 - 本代码仓提到的数据集和模型仅作为示例，这些数据集和模型仅供您用于非商业目的，如您使用这些数据集和模型来完成示例，请您特别注意应遵守对应数据集和模型的License，如您因使用数据集或模型而产生侵权纠纷，华为不承担任何责任。
 - 如您在使用本代码仓的过程中，发现任何问题（包括但不限于功能问题、合规问题），请在本代码仓提交issue，我们将及时审视并解答。
