@@ -1,3 +1,16 @@
+---
+pipeline_tag: text-to-video
+frameworks:
+  - PyTorch
+license: apache-2.0
+library_name: openmind
+hardwares:
+  - NPU
+  - Atlas 800I A2
+  - Atlas 800T A2
+language:
+  - en
+---
 ## 一、准备运行环境
 
   **表 1**  版本配套表
@@ -58,6 +71,17 @@ tar -xzvf pytorch_v{pytorchversion}_py{pythonversion}.tar.gz
 # 解压后，会有whl包
 pip install torch_npu-{pytorchversion}.xxxx.{arch}.whl
 ```
+
+### 1.6 gcc、g++安装
+```shell
+# 若环境镜像中没有gcc、g++，请用户自行安装
+yum install gcc
+yum install g++
+
+# 导入头文件路径
+export CPLUS_INCLUDE_PATH=/usr/include/c++/12/:/usr/include/c++/12/aarch64-openEuler-linux/:$CPLUS_INCLUDE_PATH
+```
+注：若使用openeuler镜像，需要配置gcc、g++环境，否则会导致`fatal error: 'stdio.h' file not found`
 
 ## 二、下载权重
 
@@ -531,6 +555,14 @@ torchrun --nproc_per_node=8 --master-port 29501 generate.py \
 - 路径要求：`--quant_desc_path`需指向完整的量化描述文件路径（即quant_model_description_*.json），且该路径要求填写绝对路径。量化权重文件（.safetensors）需与描述文件在同一目录下，否则会提示权重加载失败。
 - 任务兼容性：量化功能支持所有任务类型（T2V-1.3B、T2V-14B、I2V-14B），使用方法与上述示例一致。
 
+
+## 五、常见问题
+1. 若出现OOM, 可添加环境变量 `export T5_LOAD_CPU=1`，以降低显存占用
+2. 若遇到报错: `Directory operation failed. Reason: Directory [/usr/local/Ascend/mindie/latest/mindie-rt/aoe] does not exist`,请设置环境变量`unset TUNE_BANK_PATH`
+3. 若使用openeuler镜像, 若没有配置gcc、g++环境，会遇到报错：`fatal error: 'stdio.h' file not found`，请参考`1.6 gcc、g++安装`
+4. 若循环跑纯模型推理，可能会因为HCCL端口未及时释放，导致因端口被占用而推理失败，报错：`Failed to bind the IP port. Reason: The IP address and port have been bound already.`
+  `HCCL function error :HcclGetRootInfo(&hcclID), error code is 7`:  请配置`export HCCL_HOST_SOCKET_PORT_RANGE="auto"`不指定端口
+  `HCCL function error :HcclGetRootInfo(&hcclID), error code is 11`: 请配置`sysctl -w net.ipv4.ip_local_reserved_ports=60000-60015`预留端口
 
 ## 声明
 - 本代码仓提到的数据集和模型仅作为示例，这些数据集和模型仅供您用于非商业目的，如您使用这些数据集和模型来完成示例，请您特别注意应遵守对应数据集和模型的License，如您因使用数据集或模型而产生侵权纠纷，华为不承担任何责任。
