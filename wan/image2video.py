@@ -75,6 +75,7 @@ class WanI2V:
         self.rank = rank
         self.use_usp = use_usp
         self.t5_cpu = t5_cpu
+        self.dit_fsdp = dit_fsdp
 
         self.num_train_timesteps = config.num_train_timesteps
         self.param_dtype = config.param_dtype
@@ -380,6 +381,12 @@ class WanI2V:
 
         del noise, latent
         del sample_scheduler
+
+        if self.dit_fsdp:
+            self.model._fsdp_wrapped_module.freqs_list = None
+        else:
+            self.model.freqs_list = None
+
         if offload_model:
             gc.collect()
             torch.cuda.synchronize()
