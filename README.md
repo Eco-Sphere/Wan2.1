@@ -1,16 +1,3 @@
----
-pipeline_tag: text-to-video
-frameworks:
-  - PyTorch
-license: apache-2.0
-library_name: openmind
-hardwares:
-  - NPU
-  - Atlas 800I A2
-  - Atlas 800T A2
-language:
-  - en
----
 ## 一、准备运行环境
 
   **表 1**  版本配套表
