@@ -282,20 +282,22 @@ class WanFLF2V:
         if offload_model:
             self.clip.model.cpu()
 
-        y = self.vae.encode([
-            torch.concat([
-                torch.nn.functional.interpolate(
-                    first_frame[None].to(self.device),
-                    size=(first_frame_h, first_frame_w),
-                    mode='bicubic').transpose(0, 1),
-                torch.zeros(3, F - 2, first_frame_h, first_frame_w, device = self.device),
-                torch.nn.functional.interpolate(
-                    last_frame[None].to(self.device),
-                    size=(first_frame_h, first_frame_w),
-                    mode='bicubic').transpose(0, 1),
-            ],
-                         dim=1)
-        ])[0]
+        encode_input = torch.concat([
+                            torch.nn.functional.interpolate(
+                                first_frame[None].to(self.device),
+                                size=(first_frame_h, first_frame_w),
+                                mode='bicubic').transpose(0, 1),
+                            torch.zeros(3, F - 2, first_frame_h, first_frame_w, device = self.device),
+                            torch.nn.functional.interpolate(
+                                last_frame[None].to(self.device),
+                                size=(first_frame_h, first_frame_w),
+                                mode='bicubic').transpose(0, 1),
+                        ],
+                                    dim=1)
+        with VAE_patch_parallel():
+            y = self.vae.encode([
+                encode_input
+            ])[0]
         y = torch.concat([msk, y])
 
         @contextmanager
